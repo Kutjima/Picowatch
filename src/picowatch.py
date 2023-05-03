@@ -21,7 +21,7 @@ from dotenv import dotenv_values
 from typing import List, Optional, Tuple, Union
 
 
-BUFFER_SIZE: int = 32
+BUFFER_SIZE: int = 512
 LISTENING_TO: str = os.getcwd()
 
 
@@ -614,7 +614,6 @@ class Picowatch(object):
         self.terminal("""
             import os
             import gc
-            
             print('Board:', os.uname().machine, os.uname().version)
             print('Free memory:', round(gc.mem_free() / 1024, 2), 'kb.')
         """)
@@ -696,7 +695,6 @@ class Picowatch(object):
 
         for ln in content.decode('utf-8').split('\n'):
             print(ln)
-
 
     def upload(self, filepath: str):
         tab = Tab(4, 50, 15, 15, nb_columns=5)
