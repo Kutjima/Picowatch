@@ -1,24 +1,24 @@
-from libs.routerhttp import RouterHttp
+from libs.routerhttp import HTTP, RouterHTTP
 
 
-def a(response: RouterHttp.Response) -> int:
-    response.content = 'Not Found me...'
+def a(http: HTTP) -> int:
+    http.response.content = 'Not Found me...'
 
-def b(response: RouterHttp.Response) -> int:
-    if response.template('index.html', {'hello': 'world'}):
-        return response.RESPONSE_OK
+def b(http: HTTP) -> int:
+    if http.response.template('templates/index.html'):
+        return HTTP.STATUS_OK
     
-    return response.RESPONSE_NOT_FOUND
+    return HTTP.STATUS_NOT_FOUND
 
-def c(response: RouterHttp.Response) -> int:
-    if response.download('index.html'):
-        return response.RESPONSE_OK
+def c(http: HTTP) -> int:
+    if http.response.download('templates/index.html'):
+        return HTTP.STATUS_OK
     
-    return response.RESPONSE_NOT_FOUND
+    return HTTP.STATUS_NOT_FOUND
 
-rhttp = RouterHttp(ssid='SFR-a9c8', password='abc123de45f6')
-rhttp.map(404, '', a)
-rhttp.map('GET', '/hello/world', b)
-rhttp.map('GET', '/download', c)
+app = RouterHTTP(ssid='SFR-a9c8', password='abc123de45f6')
+#rhttp = RouterHTTP(ssid='PMD', password="Primadiag2021'...")
 
-rhttp.listen()
+app.map('GET|POST', '/', b)
+
+app.listen()
