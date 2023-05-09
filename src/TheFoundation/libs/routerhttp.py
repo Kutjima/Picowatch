@@ -104,17 +104,18 @@ class RouterHTTP():
         # connect to the access point with the ssid and password
         self.wlan.connect(ssid, password)
 
-        for c in range(0, 3):
+        for c in range(0, 10):
+            time.sleep(1)
+
             if self.wlan.status() < 0 or self.wlan.status() >= 3:
                 break
-
-            time.sleep(1)
 
         if self.wlan.isconnected() == False:
             raise RuntimeError('Connection failed to WiFi')
         else:
             self.ifconfig = self.wlan.ifconfig()
-            print(f'Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
+            print(s := f'Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
+            print('-' * len(s))
 
     def listen(self, port: int = 80):
         asyncio.run(self.start_server(port))
@@ -128,11 +129,15 @@ class RouterHTTP():
         
         asyncio.run(serve_forever())
 
-    def map(self, methods: str, pattern: str, callback: callable):
-        if str(methods).isdigit():
-            self.status_codes[methods] = callback
-        else:
-            self.patterns[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
+    def map(self, methods: str|int, pattern: str = ''):
+        def decorator(callback: callable) -> callable[[HTTP], int]:
+            if str(methods).isdigit():
+                self.status_codes[int(methods)] = callback
+            else:
+                self.patterns[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
+            
+            return callback
+        return decorator
 
     async def start_server(self, port: int = 80):        
         async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
@@ -157,33 +162,38 @@ class RouterHTTP():
                             http.request.method = match.group(1)
                     
                     if len(splitted_line := line.split(': ')) == 2:
-                        http.request.headers[splitted_line[0]] = splitted_line[1]
+                        http.request.headers[str(splitted_line[0]).lower()] = splitted_line[1]
 
                 if not http.request.url:
                     return
                 
-                if http.request.method == 'POST':
+                if http.request.method == 'POST':            
                     try:
-                        if (content_length := int(http.request.headers['Content-Length'])) > 0:
+                        if (content_length := int(http.request.headers['content-length'])) > 0:
                             post_data = await reader.readexactly(content_length)
+                    except:
+                        return await self.send(writer, http, HTTP.STATUS_LENGTH_REQUIRED)
 
-                        if 'application/x-www-form-urlencoded' in http.request.headers['Content-Type']:
+                    try:
+                        content_type = str(http.request.headers['content-type']).lower()
+
+                        if 'application/x-www-form-urlencoded' in content_type:
                             for p in post_data.decode('utf-8').split('&'):
                                 k, v = p.split('=')
                                 http.request.post_data[url_decode(k)] = url_decode(v)
-                        elif 'application/json' in http.request.headers['Content-Type']:
+                        elif 'application/json' in content_type:
                             http.request.post_data = json.loads(post_data)
                         else:
-                            return await self.send(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
-                    except Exception as e:
-                        return await self.send(writer, http, HTTP.STATUS_LENGTH_REQUIRED)
+                            raise TypeError()
+                    except:
+                        return await self.send(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
 
                 for pattern, item in self.patterns.items():
                     if http.request.method not in item[0]:
                         continue
 
-                    if pattern == http.request.url or (match := re.compile(pattern).search(http.request.url)):
-                        status_code = item[1](http) or HTTP.STATUS_NO_CONTENT
+                    if pattern == http.request.url or (match := re.match('^' + pattern + '$', http.request.url)):
+                        status_code = item[1](http, *[i for i in match.groups() if i is not None]) or HTTP.STATUS_NO_CONTENT
 
                 if status_code in self.status_codes:
                     self.status_codes[status_code](http)
