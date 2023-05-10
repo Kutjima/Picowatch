@@ -23,7 +23,26 @@ def url_decode(encoded: str):
             i += 1
 
     return decoded
+
+
+class T(dict):
+
+    def __init__(self, data: dict = {}):
+        for k, v in data.items():
+            self.__setitem__(k, v)
+
+    def __getitem__(self, k: str) -> any:
+        return getattr(self, k)
     
+    def __setitem__(self, k: str, v: any):
+        if isinstance(v, dict):
+            v = T(v)
+        elif isinstance(v, list):
+            for i, vv in enumerate(v):
+                v[i] = T(vv) if isinstance(vv, dict) else vv
+                    
+        setattr(self, k, v)
+
 
 class HTTP():
 
@@ -69,7 +88,15 @@ class HTTP():
                     self.content = f.read()
 
                 if isinstance(context, dict):
-                    self.content = self.content.format(**context)
+                    global k, v
+
+                    for k, v in context.items():
+                        if isinstance(v, dict):
+                            exec(f'{k} = T(v)')
+                        else:
+                            exec(f'{k} = v')
+
+                    self.content = re.sub(r'\{\s*(\S+)\s*\}', lambda m: eval(m.group(1)), self.content)
                 elif isinstance(context, (tuple, list)):
                     self.content = self.content.format(*context)
 
