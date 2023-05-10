@@ -61,15 +61,17 @@ class HTTP():
             self.content_type: str = 'text/html'
             self.content_headers: dict = {}
 
-        def template(self, template: str, context: dict = {}) -> bool:
+        def template(self, template: str, context: dict|list|tuple = {}) -> bool:
             try:
                 self.content = ''
 
                 with open(template, 'r') as f:
                     self.content = f.read()
 
-                for name, value in context.items():
-                    self.content = self.content.replace(f'[{name}]', value)
+                if isinstance(context, dict):
+                    self.content = self.content.format(**context)
+                elif isinstance(context, (tuple, list)):
+                    self.content = self.content.format(*context)
 
                 return True
             except Exception as e:
@@ -94,7 +96,7 @@ class HTTP():
 
 class RouterHTTP():
 
-    def __init__(self, ssid: str, password: str):
+    def __init__(self, ssid: str, password: str, ignore_exception: bool = False):
         self.patterns  = {}
         self.status_codes = {}
 
@@ -111,7 +113,8 @@ class RouterHTTP():
                 break
 
         if self.wlan.isconnected() == False:
-            raise RuntimeError('Connection failed to WiFi')
+            if not ignore_exception:
+                raise RuntimeError('Connection failed to WiFi')
         else:
             self.ifconfig = self.wlan.ifconfig()
             print(s := f'Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
@@ -193,7 +196,12 @@ class RouterHTTP():
                         continue
 
                     if pattern == http.request.url or (match := re.match('^' + pattern + '$', http.request.url)):
-                        status_code = item[1](http, *[i for i in match.groups() if i is not None]) or HTTP.STATUS_NO_CONTENT
+                        args = []
+                        
+                        if match:
+                            args = [i for i in match.groups() if i is not None]
+
+                        status_code = item[1](http, *args) or HTTP.STATUS_NO_CONTENT
 
                 if status_code in self.status_codes:
                     self.status_codes[status_code](http)

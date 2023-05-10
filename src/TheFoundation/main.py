@@ -1,7 +1,16 @@
+import json
+
 from libs.routerhttp import HTTP, RouterHTTP
 
 
-app = RouterHTTP(ssid='SFR-xxxx', password='abc123de45f6')
+for crendential in json.load(open('/credentials.json')):
+    app = RouterHTTP(crendential['ssid'], crendential['password'], ignore_exception=True)
+
+    if app.wlan.isconnected():
+        break
+
+if app.wlan.isconnected() == False:
+    raise RuntimeError('Connection failed to WiFi')
 
 
 @app.map(404)
@@ -10,7 +19,7 @@ def a(http: HTTP) -> int:
 
 @app.map('GET|POST', '/')
 def b(http: HTTP) -> int:
-    if http.response.template('templates/index.html'):
+    if http.response.template('templates/index.html', {'title': 'Hello World!'}):
         return HTTP.STATUS_OK
     
     return HTTP.STATUS_NOT_FOUND
