@@ -25,26 +25,23 @@ def url_decode(encoded: str):
     return decoded
 
 
-class T(dict):
+class Tz:
 
     def __init__(self, data: dict = {}):
         for k, v in data.items():
-            self.__setitem__(k, v)
+            if isinstance(v, dict):
+                v = Tz(v)
+            elif isinstance(v, list):
+                for i, vv in enumerate(v):
+                    v[i] = Tz(vv) if isinstance(vv, dict) else vv
+                        
+            setattr(self, k, v)
 
     def __getitem__(self, k: str) -> any:
         return getattr(self, k)
     
-    def __setitem__(self, k: str, v: any):
-        if isinstance(v, dict):
-            v = T(v)
-        elif isinstance(v, list):
-            for i, vv in enumerate(v):
-                v[i] = T(vv) if isinstance(vv, dict) else vv
-                    
-        setattr(self, k, v)
-
-
-class HTTP():
+    
+class HTTP:
 
     STATUS_OK: int = 200
     STATUS_NO_CONTENT: int = 204
@@ -64,7 +61,7 @@ class HTTP():
         self.request = self.Request()
         self.response = self.Response()
     
-    class Request():
+    class Request:
 
         def __init__(self):
             self.url: str = ''
@@ -73,7 +70,7 @@ class HTTP():
             self.headers: dict = {}
             self.post_data: dict = {}
 
-    class Response():
+    class Response:
 
         def __init__(self):
             self.content: str = ''
@@ -92,7 +89,7 @@ class HTTP():
 
                     for k, v in context.items():
                         if isinstance(v, dict):
-                            exec(f'{k} = T(v)')
+                            exec(f'{k} = Tz(v)')
                         else:
                             exec(f'{k} = v')
 
@@ -121,7 +118,7 @@ class HTTP():
                 return False
 
 
-class RouterHTTP():
+class RouterHTTP:
 
     def __init__(self, ssid: str, password: str, ignore_exception: bool = False):
         self.patterns  = {}
