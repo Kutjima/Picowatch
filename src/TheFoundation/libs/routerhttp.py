@@ -54,8 +54,8 @@ def template(content: str, context: dict = {}) -> str:
         else:
             exec(f'{k} = v')
     
-    return re.sub(r'\{\s*(.*?)\s*\}', lambda m: eval(m.group(1)), content)
-    
+    return re.sub(r'\{\s*(.*?)\s*\}', lambda m: eval(m.group(1)) or '', content)
+
     
 class HTTP:
 
