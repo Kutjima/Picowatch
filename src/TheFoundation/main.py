@@ -19,7 +19,8 @@ def a(http: HTTP) -> int:
 
 @app.map('GET|POST', '/')
 def b(http: HTTP) -> int:
-    if http.response.template('templates/index.html', {'metadata': {'title': 'Hello World!'}}):
+    if (content := http.response.template('templates/index.html', {'metadata': {'title': 'Hello World!', 'description': 'Hello my world!'}})):
+        http.response.content = content
         return HTTP.STATUS_OK
     
     return HTTP.STATUS_NOT_FOUND

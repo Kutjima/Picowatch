@@ -13,12 +13,16 @@
     <div class="container mt-4">
         <form action="" method="post">
             <fieldset>
-                <legend>{metadata.title}</legend>
+                <legend>{ metadata.title }</legend>
+                <p>{ metadata.description.upper() }</p>
+                
                 <div class="form-group">
                     <label class="form-label mt-4">Transport</label>
                     <input class="form-control" type="text" name="transport" /> 
                     <small class="form-text text-muted">We'll never share your email with anyone else.</small>
                 </div>
+
+
                 <div class="form-group">
                     <label class="form-label mt-4">Description</label>
                     <textarea class="form-control" name="meta[description]"></textarea>

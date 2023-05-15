@@ -39,6 +39,22 @@ class Tz:
 
     def __getitem__(self, k: str) -> any:
         return getattr(self, k)
+
+    
+def template(content: str, context: dict = {}) -> str:
+    if content.endswith('.html'):
+        with open(content, 'r') as f:
+            content = f.read()
+
+    global k, v
+
+    for k, v in context.items():
+        if isinstance(v, dict):
+            exec(f'{k} = Tz(v)')
+        else:
+            exec(f'{k} = v')
+    
+    return re.sub(r'\{\s*(.*?)\s*\}', lambda m: eval(m.group(1)), content)
     
     
 class HTTP:
@@ -77,31 +93,14 @@ class HTTP:
             self.content_type: str = 'text/html'
             self.content_headers: dict = {}
 
-        def template(self, template: str, context: dict|list|tuple = {}) -> bool:
+        def template(self, content: str, context: dict = {}) -> str|bool:
             try:
-                self.content = ''
-
-                with open(template, 'r') as f:
-                    self.content = f.read()
-
-                if isinstance(context, dict):
-                    global k, v
-
-                    for k, v in context.items():
-                        if isinstance(v, dict):
-                            exec(f'{k} = Tz(v)')
-                        else:
-                            exec(f'{k} = v')
-
-                    self.content = re.sub(r'\{\s*(\S+)\s*\}', lambda m: eval(m.group(1)), self.content)
-                elif isinstance(context, (tuple, list)):
-                    self.content = self.content.format(*context)
-
-                return True
+                return template(content, context)
             except Exception as e:
-                print(f'RouterHTTP.Response.template("{template}"): {e}')
-                return False
-
+                print(f'Response.template("{content}"): {e}')
+            
+            return False
+    
         def download(self, filename: str) -> bool:
             try:
                 self.content = ''
@@ -115,7 +114,8 @@ class HTTP:
                 return True
             except Exception as e:
                 print(f'RouterHTTP.Response.download("{filename}"): {e}')
-                return False
+            
+            return False
 
 
 class RouterHTTP:
