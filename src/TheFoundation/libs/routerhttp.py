@@ -39,9 +39,18 @@ class Tz:
 
     def __getitem__(self, k: str) -> any:
         return getattr(self, k)
+    
+    def __str__(self) -> str:
+        return str(self.__dict__)
+    
+    def __len__(self) -> int:
+        return len(self.__dict__)
+    
+    def items(self) -> dict[str, any]:
+        return self.__dict__.items()
 
     
-def template(content: str, context: dict = {}) -> str:
+def template(content: str, context: dict = {}, use_braces: bool = False) -> str:
     if content.endswith('.html'):
         with open(content, 'r') as f:
             content = f.read()
@@ -54,9 +63,36 @@ def template(content: str, context: dict = {}) -> str:
         else:
             exec(f'{k} = v')
     
-    return re.sub(r'\{\s*(.*?)\s*\}', lambda m: eval(m.group(1)) or '', content)
+    content = re.sub(r'\<\?\=\s*(.*?)\s*\?\>', lambda m: str(eval(m.group(1)) or ''), content)
 
-    
+    if use_braces:
+        content = re.sub(r'\{\s*(.*?)\s*\}', lambda m: str(eval(m.group(1)) or ''), content)
+
+    return content
+
+def include(content: str = '', xtimes: tuple[str, list|tuple|dict] = [], conditions: list[tuple[str, str|list|tuple]] = [], use_braces: bool = False) -> str:
+    if conditions:
+        for expression, content in conditions:
+            if eval(str(expression)):
+                if isinstance(content, (list, tuple)):
+                    return template(*content, use_braces=use_braces)
+                else:
+                    return template(content, use_braces=use_braces)
+    elif xtimes:
+        r = ''
+
+        if isinstance(xtimes, (Tz, dict)):
+            for k, v in xtimes.items():
+                r += template(content, {'k': k, 'v': v}, use_braces=use_braces)
+        else:
+            for i in xtimes:
+                r += template(content, {'i': i}, use_braces=use_braces)
+
+        return r
+    else:
+        return template(content, use_braces=use_braces)
+
+
 class HTTP:
 
     STATUS_OK: int = 200

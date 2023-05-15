@@ -13,9 +13,15 @@
     <div class="container mt-4">
         <form action="" method="post">
             <fieldset>
-                <legend>{ metadata.title }</legend>
-                <p>{ metadata.description }</p>
-                
+                <?= include(conditions=[
+                    ('len({"s", "v"}) == 2', ('templates/ex.html', metadata)), 
+                    (1, 'Hehe') # else
+                ]) ?>
+
+                <?= include('templates/exi.html', xtimes=range(0, 5)) ?>
+
+                <?= include('{i}. Yo the king !<br />', xtimes=range(1, 3), use_braces=True) ?>
+
                 <div class="form-group">
                     <label class="form-label mt-4">Transport</label>
                     <input class="form-control" type="text" name="transport" /> 
