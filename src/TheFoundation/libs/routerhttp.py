@@ -48,49 +48,94 @@ class Tz:
     
     def items(self) -> dict[str, any]:
         return self.__dict__.items()
-
     
-def template(content: str, context: dict = {}, use_braces: bool = False) -> str:
-    if content.endswith('.html'):
-        with open(content, 'r') as f:
-            content = f.read()
 
-    global k, v
+class Tz:
 
-    for k, v in context.items():
-        if isinstance(v, dict):
-            exec(f'{k} = Tz(v)')
-        else:
-            exec(f'{k} = v')
+    def __init__(self, data: dict = {}):
+        for k, v in data.items():
+            if isinstance(v, dict):
+                v = Tz(v)
+            elif isinstance(v, list):
+                for i, vv in enumerate(v):
+                    v[i] = Tz(vv) if isinstance(vv, dict) else vv
+                        
+            setattr(self, k, v)
+
+    def __getitem__(self, k: str) -> any:
+        return getattr(self, k)
     
-    content = re.sub(r'\<\?\=\s*(.*?)\s*\?\>', lambda m: str(eval(m.group(1)) or ''), content)
+    def __str__(self) -> str:
+        return str(self.__dict__)
+    
+    def __len__(self) -> int:
+        return len(self.__dict__)
+    
+    def items(self) -> dict[str, any]:
+        return self.__dict__.items()
+    
 
-    if use_braces:
-        content = re.sub(r'\{\s*(.*?)\s*\}', lambda m: str(eval(m.group(1)) or ''), content)
+class Tf:
 
-    return content
+    @staticmethod
+    def set(name: str, content: str) -> str:
+        content = content.replace('"', '\\"')
+        exec(f'{name} = Tf.compile("{content}")')
+    
+    @staticmethod
+    def compile(content: str) -> str:
+        return re.sub(r'\{\s*(.*?)\s*\}', lambda m: f'<?= {m.group(1) or ""} ?>', content)
 
-def include(content: str = '', xtimes: tuple[str, list|tuple|dict] = [], conditions: list[tuple[str, str|list|tuple]] = [], use_braces: bool = False) -> str:
-    if conditions:
-        for expression, content in conditions:
-            if eval(str(expression)):
-                if isinstance(content, (list, tuple)):
-                    return template(*content, use_braces=use_braces)
+    @staticmethod
+    def echo(content: str, context: dict = {}, times: iter = [0]) -> str:
+        global i, k, v
+
+        if (content := str(content)) and (content.endswith('.html') or content.endswith('.tpl')):
+            with open(content, 'r') as f:
+                content = f.read()
+        
+        echo = ''
+
+        if isinstance(times, (Tz, dict)):
+            for k, v in times.items():
+                if not isinstance(v, dict):
+                    exec(f'{k} = v')
                 else:
-                    return template(content, use_braces=use_braces)
-    elif xtimes:
-        r = ''
-
-        if isinstance(xtimes, (Tz, dict)):
-            for k, v in xtimes.items():
-                r += template(content, {'k': k, 'v': v}, use_braces=use_braces)
+                    exec(f'{k} = Tz(v)')
+                
+                echo += re.sub(r'\<\?\=\s*(.*?)\s*\?\>', lambda m: str(eval(m.group(1)) or ''), content)
         else:
-            for i in xtimes:
-                r += template(content, {'i': i}, use_braces=use_braces)
+            for i in times:
+                for k, v in context.items():
+                    if not isinstance(v, dict):
+                        exec(f'{k} = v')
+                    else:
+                        exec(f'{k} = Tz(v)')
 
-        return r
-    else:
-        return template(content, use_braces=use_braces)
+                echo += re.sub(r'\<\?\=\s*(.*?)\s*\?\>', lambda m: str(eval(m.group(1)) or ''), content)
+
+        return echo
+
+    @staticmethod
+    def match(expression: str, then: str):
+        return Tf.Eval().match(expression, then)
+
+    class Eval:
+
+        def __init__(self):
+            self.content: str = False
+
+        def match(self, expression: str, then: str):
+            if self.content == False and eval(str(expression)):
+                self.content = then
+
+            return self
+        
+        def nomatch(self, then: str = '') -> str:
+            if self.content == False:
+                self.content = then
+
+            return Tf.echo(self.content)
 
 
 class HTTP:
@@ -130,12 +175,12 @@ class HTTP:
             self.content_headers: dict = {}
 
         def template(self, content: str, context: dict = {}) -> str|bool:
-            try:
-                return template(content, context)
-            except Exception as e:
-                print(f'Response.template("{content}"): {e}')
+            #try:
+                return Tf.echo(content, context)
+            #except Exception as e:
+            #    print(f'Response.template("{content}"): {e}')
             
-            return False
+            # return False
     
         def download(self, filename: str) -> bool:
             try:

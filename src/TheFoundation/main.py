@@ -20,19 +20,18 @@ def a(http: HTTP) -> int:
 @app.map('GET|POST', '/')
 def b(http: HTTP) -> int:
     if (content := http.response.template('templates/index.html', {
-        'l': [1, 2, 3, 4, 5],
         'metadata': {
             'uuid_0': {
-                'title': 'Hello World!', 
-                'description': 'Hello my world!'
+                'title': 'Hello World 1!', 
+                'description': 'Hello my world 1!'
+            },
+            'uuid_1': {
+                'title': 'Hello World 2!', 
+                'description': 'Hello my world 2!'
             },
             'uuid_2': {
-                'title': 'Hello World!', 
-                'description': 'Hello my world!'
-            },
-            'uuid_3': {
-                'title': 'Hello World!', 
-                'description': 'Hello my world!'
+                'title': 'Hello World 3!', 
+                'description': 'Hello my world 3!'
             }
         },
     })):

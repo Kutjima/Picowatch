@@ -13,21 +13,19 @@
     <div class="container mt-4">
         <form action="" method="post">
             <fieldset>
-                <?= include(conditions=[
-                    ('len({"s", "v"}) == 2', ('templates/ex.html', metadata)), 
-                    (1, 'Hehe') # else
-                ]) ?>
-
-                <?= include('templates/exi.html', xtimes=range(0, 5)) ?>
-
-                <?= include('{i}. Yo the king !<br />', xtimes=range(1, 3), use_braces=True) ?>
-
+                <?= Tf.set('nomatch', '{ metadata.uuid_0.title } { metadata.uuid_0.description }') ?>
+                <?= Tf.match('1 == 10', then='templates/ex.html')\
+                        .match('1 == 20', then='templates/ex1.html')\
+                            .nomatch(then=Tf.set('e', '30') or nomatch)
+                ?>
+                <hr />
+                <?= Tf.echo('templates/ex2.html', times=metadata) ?>
+               
                 <div class="form-group">
                     <label class="form-label mt-4">Transport</label>
                     <input class="form-control" type="text" name="transport" /> 
                     <small class="form-text text-muted">We'll never share your email with anyone else.</small>
                 </div>
-
 
                 <div class="form-group">
                     <label class="form-label mt-4">Description</label>
