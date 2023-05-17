@@ -23,31 +23,6 @@ def url_decode(encoded: str):
             i += 1
 
     return decoded
-
-
-class Tz:
-
-    def __init__(self, data: dict = {}):
-        for k, v in data.items():
-            if isinstance(v, dict):
-                v = Tz(v)
-            elif isinstance(v, list):
-                for i, vv in enumerate(v):
-                    v[i] = Tz(vv) if isinstance(vv, dict) else vv
-                        
-            setattr(self, k, v)
-
-    def __getitem__(self, k: str) -> any:
-        return getattr(self, k)
-    
-    def __str__(self) -> str:
-        return str(self.__dict__)
-    
-    def __len__(self) -> int:
-        return len(self.__dict__)
-    
-    def items(self) -> dict[str, any]:
-        return self.__dict__.items()
     
 
 class Tz:
@@ -78,7 +53,7 @@ class Tz:
 class Tf:
 
     @staticmethod
-    def set(name: str, content: str) -> str:
+    def set(name: str, content: str):
         content = content.replace('"', '\\"')
         exec(f'{name} = Tf.compile("{content}")')
     
@@ -87,12 +62,17 @@ class Tf:
         return re.sub(r'\{\s*(.*?)\s*\}', lambda m: f'<?= {m.group(1) or ""} ?>', content)
 
     @staticmethod
-    def echo(content: str, context: dict = {}, times: iter = [0]) -> str:
+    def echo(content: str, context: dict = {}, times: iter = [0], use_braces: bool = False) -> str:
         global i, k, v
 
         if (content := str(content)) and (content.endswith('.html') or content.endswith('.tpl')):
+            use_braces = True
+
             with open(content, 'r') as f:
                 content = f.read()
+
+        # if use_braces:
+        #     content = re.sub(r'\{\s*(.*?)\s*\}', lambda m: f'<?= {m.group(1) or ""} ?>', content)
         
         echo = ''
 
