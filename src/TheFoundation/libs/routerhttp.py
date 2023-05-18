@@ -53,67 +53,109 @@ class Tz:
 class Tf:
 
     @staticmethod
-    def set(name: str, content: str):
-        content = content.replace('"', '\\"')
-        exec(f'{name} = Tf.compile("{content}")')
-    
-    @staticmethod
-    def compile(content: str) -> str:
-        return re.sub(r'\{\s*(.*?)\s*\}', lambda m: f'<?= {m.group(1) or ""} ?>', content)
+    def set(name: str, content: str) -> str:
+        content = str(content).replace('"', '\\"')
+
+        return exec(f'{name} = "{content}"') or ''
 
     @staticmethod
-    def echo(content: str, context: dict = {}, times: iter = [0], use_braces: bool = False) -> str:
-        global i, k, v
+    def eval(match: re.match):
+        try:
+            return str(eval(match.group(1)) or '') 
+        except Exception as e:
+            raise Exception(f'Tf.eval(tag={str(match.group(0)).replace("<", "&lt;")}): {str(e)}')
+
+    @staticmethod
+    def echo(content: str, context: dict = {}, times: iter = [0]) -> str:
+        global k, v, i, item
 
         if (content := str(content)) and (content.endswith('.html') or content.endswith('.tpl')):
-            use_braces = True
-
             with open(content, 'r') as f:
                 content = f.read()
-
-        # if use_braces:
-        #     content = re.sub(r'\{\s*(.*?)\s*\}', lambda m: f'<?= {m.group(1) or ""} ?>', content)
+        elif content.endswith('.py'):
+            with open(content, 'r') as f:
+                return exec(f.read()) or ''
         
-        echo = ''
+        for k, v in context.items():
+            if not isinstance(v, dict):
+                exec(f'{k} = v')
+            else:
+                exec(f'{k} = Tz(v)') 
+
+            del k, v
 
         if isinstance(times, (Tz, dict)):
-            for k, v in times.items():
-                if not isinstance(v, dict):
-                    exec(f'{k} = v')
-                else:
-                    exec(f'{k} = Tz(v)')
-                
-                echo += re.sub(r'\<\?\=\s*(.*?)\s*\?\>', lambda m: str(eval(m.group(1)) or ''), content)
+            times = times.items()
+        elif isinstance(times, list):
+            times = enumerate(times)
         else:
-            for i in times:
-                for k, v in context.items():
-                    if not isinstance(v, dict):
-                        exec(f'{k} = v')
-                    else:
-                        exec(f'{k} = Tz(v)')
+            raise TypeError('times must be iterable')
 
-                echo += re.sub(r'\<\?\=\s*(.*?)\s*\?\>', lambda m: str(eval(m.group(1)) or ''), content)
+        echo = ''
+
+        for i, item in times:
+            try:
+                if not isinstance(item, dict):
+                    item = item
+                else:
+                    item = Tz(item)
+
+                echo += re.sub(r'\{\s*(.*?)\s*\}', Tf.eval, re.sub(r'\<\?\=\s*(.*?)\s*\?\>', Tf.eval, content))
+            except Exception as e:
+                raise e
 
         return echo
 
     @staticmethod
-    def match(expression: str, then: str):
-        return Tf.Eval().match(expression, then)
+    def match(expression: str, then: str|dict):
+        return Tf.Statement().match(expression, then)
 
-    class Eval:
+    class Statement:
 
         def __init__(self):
             self.content: str = False
 
-        def match(self, expression: str, then: str):
+        def match(self, expression: str, then: str|dict):
+            if not isinstance(then, (str, dict)):
+                raise TypeError('then must be str or dict')
+
+            global k, v
+
             if self.content == False and eval(str(expression)):
-                self.content = then
+                if isinstance(then, dict):
+                    self.content = ''
+
+                    for k, v in then.items():
+                        if not isinstance(v, dict):
+                            exec(f'{k} = v')
+                        else:
+                            exec(f'{k} = Tz(v)') 
+
+                        del k, v
+                else:
+                    self.content = str(then)
 
             return self
         
-        def nomatch(self, then: str = '') -> str:
+        def nomatch(self, then: str|dict = '') -> str:
+            if not isinstance(then, (str, dict)):
+                raise TypeError('then must be str or dict')
+
+            global k, v
+
             if self.content == False:
-                self.content = then
+                if isinstance(then, dict):
+                    self.content = ''
+
+                    for k, v in then.items():
+                        if not isinstance(v, dict):
+                            exec(f'{k} = v')
+                        else:
+                            exec(f'{k} = Tz(v)') 
+
+                        del k, v
+                else:
+                    self.content = str(then)
 
             return Tf.echo(self.content)
 
@@ -155,12 +197,10 @@ class HTTP:
             self.content_headers: dict = {}
 
         def template(self, content: str, context: dict = {}) -> str|bool:
-            #try:
+            try:
                 return Tf.echo(content, context)
-            #except Exception as e:
-            #    print(f'Response.template("{content}"): {e}')
-            
-            # return False
+            except Exception as e:
+                return f'Response.template("{content}"): {e}'
     
         def download(self, filename: str) -> bool:
             try:

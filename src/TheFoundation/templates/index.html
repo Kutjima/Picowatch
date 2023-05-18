@@ -13,14 +13,13 @@
     <div class="container mt-4">
         <form action="" method="post">
             <fieldset>
-                <?= Tf.set('nomatch', '{ metadata.uuid_0.title } { metadata.uuid_0.description }') ?>
-                <?= Tf.match('1 == 10', then='templates/ex.html')\
-                        .match('1 == 20', then='templates/ex1.html')\
-                            .nomatch(then=Tf.set('e', '30') or nomatch)
-                ?>
+                <?= Tf.set('e', metadata.uuid_0.title + ' YoYo') ?>
+                <?= Tf.match('1 == 1', then='1 == 1 indeed!').nomatch(then='No match') ?>
                 <hr />
-                <?= Tf.echo('templates/ex2.html', times=metadata) ?>
-                <?= Tf.echo('Hello { str(i) }! <br >', times=range(0, 5)) ?>
+                { e }
+                <br />
+                <?= Tf.echo('{ i } { item.title }! <br >', times=metadata) ?>
+                <?= Tf.echo('{ i } { item }! <br >', times=[2, 3, 4]) ?>
                
                 <div class="form-group">
                     <label class="form-label mt-4">Transport</label>
