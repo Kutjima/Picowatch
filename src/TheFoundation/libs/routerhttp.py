@@ -1,4 +1,5 @@
 import gc
+import os
 import re
 import json
 import time
@@ -165,7 +166,7 @@ class HTTP:
     STATUS_OK: int = 200
     STATUS_NO_CONTENT: int = 204
     STATUS_MOVED_PERMANENTLY: int = 301
-    STATUS_MOVED_TEMPORARY: int = 301
+    STATUS_MOVED_TEMPORARY: int = 302
     STATUS_TEMPORARY_REDIRECT: int = 307
     STATUS_BAD_REQUEST: int = 400
     STATUS_UNAUTHORIZED: int = 401
@@ -175,6 +176,30 @@ class HTTP:
     STATUS_UNSUPPORTED_MEDIA_TYPE: int = 415
     STATUS_UNPROCESSABLE_ENTITY: int = 422
     STATUS_INTERNAL_SERVER_ERROR: int = 500
+
+    HEADER_CONTENT_TYPE: dict = {
+        'html': 'text/html',
+        'css': 'text/css',
+        'js': 'application/javascript',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'ico': 'image/x-icon',
+        'svg': 'image/svg+xml',
+        'json': 'application/json',
+        'xml': 'application/xml',
+        'pdf': 'application/pdf',
+        'zip': 'application/zip',
+        'txt': 'text/plain',
+        'csv': 'text/csv',
+        'mp3': 'audio/mpeg',
+        'mp4': 'video/mp4',
+        'wav': 'audio/wav',
+        'ogg': 'audio/ogg',
+        'webm': 'video/webm',
+    }
 
     def __init__(self):
         self.request = self.Request()
@@ -188,6 +213,9 @@ class HTTP:
             self.params: dict = {}
             self.headers: dict = {}
             self.post_data: dict = {}
+
+        def redirect_to(self, url: str):
+            raise NotImplementedError()
 
     class Response:
 
@@ -222,6 +250,7 @@ class HTTP:
 class RouterHTTP:
 
     def __init__(self, ssid: str, password: str, ignore_exception: bool = False):
+        self.mounts = {}
         self.patterns  = {}
         self.status_codes = {}
 
@@ -259,13 +288,22 @@ class RouterHTTP:
 
     def map(self, methods: str|int, pattern: str = ''):
         def decorator(callback: callable) -> callable[[HTTP], int]:
-            if str(methods).isdigit():
+            if str(methods).isdigit() and methods not in [200, 204, 301, 302, 307]:
                 self.status_codes[int(methods)] = callback
             else:
                 self.patterns[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
             
             return callback
         return decorator
+    
+    def mount(self, path: str, name: str = ''):
+        try:
+            if (os.stat(path)[0] & 0x4000) != 0:
+                self.mounts[name if name != '' else path] = path
+            else:
+                raise NotADirectoryError()
+        except:
+            raise Exception(f'"{path}" is not a valid directory!')
 
     async def start_server(self, port: int = 80):        
         async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
@@ -315,6 +353,25 @@ class RouterHTTP:
                             raise TypeError()
                     except:
                         return await self.send(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
+                elif http.request.method == 'GET':
+                    for name, path in self.mounts.items():
+                        if http.request.url.startswith(name):
+                            try:
+                                if ((stat := os.stat(filename := f'{path}{http.request.url[len(name):]}'))[0] & 0x4000) == 0:
+                                    with open(filename, 'rb') as fh:
+                                        http.response.content = fh.read()
+                                        http.response.content_type = HTTP.HEADER_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream')
+                                        http.response.content_headers['Content-Length'] = stat[6]
+                                        status_code = HTTP.STATUS_OK
+                                else:
+                                    raise FileNotFoundError()
+                            except:
+                                status_code = HTTP.STATUS_NOT_FOUND
+
+                                if status_code in self.status_codes:
+                                    self.status_codes[status_code](http)
+
+                            return await self.send(writer, http, status_code)
 
                 for pattern, item in self.patterns.items():
                     if http.request.method not in item[0]:
@@ -360,5 +417,8 @@ class RouterHTTP:
         finally:
             writer.close()
             await writer.wait_closed()
+            n = time.localtime()
+            
+            print(f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
         
         led.value(0)

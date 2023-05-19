@@ -12,14 +12,17 @@ for crendential in json.load(open('/credentials.json')):
 if app.wlan.isconnected() == False:
     raise RuntimeError('Connection failed to WiFi')
 
+app.mount(path='/www/public', name='/public')
+
 
 @app.map(404)
 def a(http: HTTP) -> int:
     http.response.content = 'Not Found me...'
 
+
 @app.map('GET|POST', '/')
 def b(http: HTTP) -> int:
-    if (content := http.response.template('templates/index.html', {
+    if (content := http.response.template('www/templates/index.html', {
         'metadata': {
             'uuid_0': {
                 'title': 'Hello World 1!', 
@@ -40,9 +43,10 @@ def b(http: HTTP) -> int:
     
     return HTTP.STATUS_NOT_FOUND
 
+
 @app.map('GET', '/(download|dl)/(something)?')
 def c(http: HTTP, access: str, nothing: str = '11111') -> int:
-    if http.response.template('templates/index.html'):
+    if http.response.template('www/templates/index.html'):
         return HTTP.STATUS_OK
     
     return HTTP.STATUS_NOT_FOUND
