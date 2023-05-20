@@ -15,14 +15,18 @@ if app.wlan.isconnected() == False:
 app.mount(path='/www/public', name='/public')
 
 
-@app.map(404)
-def a(http: HTTP) -> int:
+@app.map(HTTP.STATUS_NOT_FOUND)
+def a(http: HTTP):
     http.response.content = 'Not Found me...'
+
+@app.map(HTTP.STATUS_INTERNAL_SERVER_ERROR)
+def b(http: HTTP):
+    pass
 
 
 @app.map('GET|POST', '/')
-def b(http: HTTP) -> int:
-    if (content := http.response.template('www/templates/index.html', {
+def c(http: HTTP) -> int:
+    status, content = http.response.template('www/templates/index.html', {
         'metadata': {
             'uuid_0': {
                 'title': 'Hello World 1!', 
@@ -37,18 +41,18 @@ def b(http: HTTP) -> int:
                 'description': 'Hello my world 3!'
             }
         },
-    })):
-        http.response.content = content
+    })
+
+    http.response.content = content
+
+    if status:
         return HTTP.STATUS_OK
     
-    return HTTP.STATUS_NOT_FOUND
+    return HTTP.STATUS_INTERNAL_SERVER_ERROR
 
 
-@app.map('GET', '/(download|dl)/(something)?')
-def c(http: HTTP, access: str, nothing: str = '11111') -> int:
-    if http.response.template('www/templates/index.html'):
-        return HTTP.STATUS_OK
-    
-    return HTTP.STATUS_NOT_FOUND
+@app.map('GET', '/(download|dl)\/?(attachment)?')
+def d(http: HTTP, access: str, nothing: str = '') -> int:
+    return http.response.attachment('www/public/favicon.png')
 
 app.listen()

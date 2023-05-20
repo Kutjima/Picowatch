@@ -60,13 +60,6 @@ class Tf:
         return exec(f'{name} = "{content}"') or ''
 
     @staticmethod
-    def eval(match: re.match):
-        try:
-            return str(eval(match.group(1)) or '') 
-        except Exception as e:
-            raise Exception(f'Tf.eval(tag={str(match.group(0)).replace("<", "&lt;")}): {str(e)}')
-
-    @staticmethod
     def echo(content: str, context: dict = {}, times: iter = [0]) -> str:
         global k, v, i, item
 
@@ -91,7 +84,7 @@ class Tf:
             times = enumerate(times)
         else:
             raise TypeError('times must be iterable')
-
+        
         echo = ''
 
         for i, item in times:
@@ -101,7 +94,10 @@ class Tf:
                 else:
                     item = Tz(item)
 
-                echo += re.sub(r'\{\s*(.*?)\s*\}', Tf.eval, re.sub(r'\<\?\=\s*(.*?)\s*\?\>', Tf.eval, content))
+                for pattern in [r'\<\?\=\s*(.*?)\s*\?\>', r'\{\s*(.*?)\s*\}']:
+                    content = re.sub(pattern, lambda match: str(eval(match.group(1) or '')), content)
+
+                echo += content
             except Exception as e:
                 raise e
 
@@ -204,7 +200,7 @@ class HTTP:
     def __init__(self):
         self.request = self.Request()
         self.response = self.Response()
-    
+
     class Request:
 
         def __init__(self):
@@ -216,7 +212,7 @@ class HTTP:
 
         def redirect_to(self, url: str):
             raise NotImplementedError()
-
+        
     class Response:
 
         def __init__(self):
@@ -224,27 +220,27 @@ class HTTP:
             self.content_type: str = 'text/html'
             self.content_headers: dict = {}
 
-        def template(self, content: str, context: dict = {}) -> str|bool:
+        def template(self, content: str, context: dict = {}) -> tuple[bool, str]:
             try:
-                return Tf.echo(content, context)
+                return (True, Tf.echo(content, context))
             except Exception as e:
-                return f'Response.template("{content}"): {e}'
+                return (False, f'Response.template("{content}"): {e}')
     
-        def download(self, filename: str) -> bool:
+        def attachment(self, filename: str) -> int:
             try:
-                self.content = ''
-                self.content_type = 'application/octet-stream'
-                self.content_headers['Content-disposition'] = f'attachment; filename="{filename.split("/")[-1]}"'
-                # self.content_headers['Content-Length'] = os.stat(filename)[6]
+                if os.stat(filename)[0] & 0x4000 == 0:
+                    with open(filename, 'rb') as f:
+                        self.content = f.read()
+                        self.content_type = HTTP.HEADER_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream')
+                        self.content_headers['Content-disposition'] = f'attachment; filename="{filename.split("/")[-1]}"'
 
-                with open(filename, 'r') as f:
-                    self.content = f.read()
-            
-                return True
+                    return HTTP.STATUS_OK
+                else:
+                    raise FileNotFoundError()
             except Exception as e:
-                print(f'RouterHTTP.Response.download("{filename}"): {e}')
+                print(f'RouterHTTP.Response.attachment("{filename}"): {e}')
             
-            return False
+            return HTTP.STATUS_NOT_FOUND
 
 
 class RouterHTTP:
@@ -260,7 +256,7 @@ class RouterHTTP:
         # connect to the access point with the ssid and password
         self.wlan.connect(ssid, password)
 
-        for c in range(0, 10):
+        for c in range(0, 5):
             time.sleep(1)
 
             if self.wlan.status() < 0 or self.wlan.status() >= 3:
@@ -288,7 +284,7 @@ class RouterHTTP:
 
     def map(self, methods: str|int, pattern: str = ''):
         def decorator(callback: callable) -> callable[[HTTP], int]:
-            if str(methods).isdigit() and methods not in [200, 204, 301, 302, 307]:
+            if str(methods).isdigit() and int(methods) >= 400:
                 self.status_codes[int(methods)] = callback
             else:
                 self.patterns[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
