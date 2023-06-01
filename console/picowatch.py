@@ -11,11 +11,6 @@ import textwrap
 import mpy_cross
 import subprocess
 
-try:
-    import readline
-except:
-    pass
-
 from serial import Serial
 from dotenv import dotenv_values
 from typing import List, Optional, Tuple, Union
@@ -696,52 +691,57 @@ class Picowatch(object):
         for ln in content.decode('utf-8').split('\n'):
             print(ln)
 
-    def upload(self, filepath: str):
+    def upload(self, filepath: Union[List, str]):
         tab = Tab(4, 50, 15, 15, nb_columns=5)
         tab.head('[ ]', 'Filename', 'Size (kb)', 'Checksum', 'Exception')
 
-        for source, size in self.internal_ls(filepath):
-            destination = source.replace(LISTENING_TO.replace(os.sep, '/'), '').strip('/')
+        for f in list(filepath):
+            for source, size in self.internal_ls(f):
+                destination = source.replace(LISTENING_TO.replace(os.sep, '/'), '').strip('/')
 
-            try:
-                tab.line('[↑]', destination, f'{round(size / 1024, 2)} kb', self.filesystem.upload(source, destination))
-            except Exception as e:
-                tab.line('[?]', destination, '', '', str(e))
+                try:
+                    tab.line('[↑]', destination, f'{round(size / 1024, 2)} kb', self.filesystem.upload(source, destination))
+                except Exception as e:
+                    tab.line('[?]', destination, '', '', str(e))
 
-    def download(self, filepath: str):
+    def download(self, filepath: Union[List, str]):
         tab = Tab(4, 50, 15, nb_columns=4)
         tab.head('[ ]', 'Filename', 'Checksum', 'Exception')
-        status, output, exception = self.filesystem.ls(filepath.strip('./').strip('/'))
 
-        if status:
-            for remote, size in output:
-                if size == -1:
-                    os.makedirs(os.path.join(LISTENING_TO, remote), 777, exist_ok=True)
+        for f in list(filepath):
+            status, output, exception = self.filesystem.ls(f.strip('./').strip('/'))
 
-            for remote, size in output:
-                destination = os.path.join(LISTENING_TO, remote).replace(os.sep, '/')
+            if status:
+                for remote, size in output:
+                    if size == -1:
+                        os.makedirs(os.path.join(LISTENING_TO, remote), 777, exist_ok=True)
 
-                if not size == -1:
-                    try:
-                        tab.line('[↓]', remote, self.filesystem.download(remote, destination))
-                    except Exception as e:
-                        tab.line('[?]', remote, '', str(e))
-        else:
-            tab.line('[?]', filepath, '', exception)
+                for remote, size in output:
+                    destination = os.path.join(LISTENING_TO, remote).replace(os.sep, '/')
 
-    def delete(self, filepath: str):
+                    if not size == -1:
+                        try:
+                            tab.line('[↓]', remote, self.filesystem.download(remote, destination))
+                        except Exception as e:
+                            tab.line('[?]', remote, '', str(e))
+            else:
+                tab.line('[?]', filepath, '', exception)
+
+    def delete(self, filepath: Union[List, str]):
         tab = Tab(4, 50, nb_columns=3)
         tab.head('[ ]', 'Filename', 'Exception')
-        status, output, exception = self.filesystem.rm(filepath.strip('./'))
+        
+        for f in list(filepath):
+            status, output, exception = self.filesystem.rm(f.strip('./'))
 
-        if status:
-            for filename, checked, exception in output:
-                if checked:
-                    tab.line('[-]', filename)
-                else:
-                    tab.line('[?]', filename, exception)
-        else:
-            tab.line('[?]', filepath, exception)
+            if status:
+                for filename, checked, exception in output:
+                    if checked:
+                        tab.line('[-]', filename)
+                    else:
+                        tab.line('[?]', filename, exception)
+            else:
+                tab.line('[?]', filepath, exception)
 
     def compare(self, filepath: str, use_vim: bool = True):
         content, _ = self.filesystem.get(filepath.strip('./').strip('/'))
@@ -915,9 +915,34 @@ except:
 print('-' * 50)
 picowatch.interrupt()
 
+
+
+try:
+    import readline
+    readline.parse_and_bind("tab: complete")
+
+    def complete(text, state):
+        tabs = [
+            'help', 'modules', 'boot', 'system', 'os', 
+            'reset', 'flash', 'status', 'mod', 'commit', 'sync', 'exit',
+        ]
+        commands = [
+            'upload ', 'put ', 'download ', 'get ', 'delete ', 'rm ', 'test ', 
+            'run ', 'scan ', 'ls ', 'edit ', 'vim ', 'source ', 'cat ', 'compare ', 
+            'diff ', 'compile ','mpy ', 'install ', 'mip '
+        ]
+        tabs.extend(commands)
+        tabs.extend([f.replace(LISTENING_TO.replace('\\', '/'), '').lstrip('/') for f, _ in picowatch.internal_ls('/')])
+        
+        return ([x for x in tabs if x.startswith(text)] + [None])[state]
+
+    readline.set_completer(complete)
+except:
+    pass
+
 while True:
     try:
-        unmessage = input('>>> ').strip()
+        unmessage = input('\033[1m\033[92m>>> \033[0m\033[0m').strip()
 
         for message in unmessage.split('&'):
             try:
@@ -925,7 +950,7 @@ while True:
                     case ['?' | 'help']:
                         print('These are common Picowatch keywords:')
                         tab = Tab(12, 10, 32, nb_columns=4)
-                        tab.head('Keywdords', 'Shortcut', 'Parameters', 'Description')
+                        tab.head('Keywords', 'Shortcut', 'Parameters', 'Description')
                         tab.line('help', '?', '', 'Show keywords and their description.')
                         tab.line('modules', '??', '', 'List availables modules on the Pyboard.')
                         tab.line('boot', '.', '', 'Perform a soft reset and run main.py (if exists) in REPL mode.')
@@ -961,11 +986,11 @@ while True:
                             subprocess.call(['code', file], shell=True)
                     case ['cat' | 'source', file]:
                         picowatch.contents(file)
-                    case ['rm' | 'delete', path]:
+                    case ['rm' | 'delete', *path]:
                         picowatch.delete(path)
-                    case ['put' | 'upload', path]:
+                    case ['put' | 'upload', *path]:
                         picowatch.upload(path)
-                    case ['get' | 'download', path]:
+                    case ['get' | 'download', *path]:
                         picowatch.download(path)
                     case ['diff' | 'compare', file, *use_vim]:
                         picowatch.compare(file, use_vim=len(use_vim) > 0)
@@ -978,10 +1003,13 @@ while True:
                     case ['mip' | 'install', package_name]:
                         picowatch.install(package_name)
                     case ['!' | 'test', *file]:
+                        picowatch.reset()
                         picowatch.test(file[0] if file else 'main.py')
                     case ['!!' | 'run', *file]:
+                        picowatch.reset()
                         picowatch.launch(file[0] if file else 'main.py')
                     case ['.'| 'boot']:
+                        picowatch.reset()
                         picowatch.boot()
                     case ['rs' | 'reset']:
                         picowatch.reset()
