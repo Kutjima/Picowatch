@@ -916,29 +916,36 @@ print('-' * 50)
 picowatch.interrupt()
 
 
-
 try:
     import readline
     readline.parse_and_bind("tab: complete")
 
     def complete(text, state):
+        
         tabs = [
             'help', 'modules', 'boot', 'system', 'os', 
             'reset', 'flash', 'status', 'mod', 'commit', 'sync', 'exit',
         ]
         commands = [
-            'upload ', 'put ', 'download ', 'get ', 'delete ', 'rm ', 'test ', 
-            'run ', 'scan ', 'ls ', 'edit ', 'vim ', 'source ', 'cat ', 'compare ', 
-            'diff ', 'compile ','mpy ', 'install ', 'mip '
+            'upload', 'put', 'download', 'get', 'delete', 'rm', 'test', 
+            'run', 'scan', 'ls', 'edit', 'vim', 'source', 'cat', 'compare', 
+            'diff', 'compile','mpy', 'install', 'mip',
         ]
         tabs.extend(commands)
-        tabs.extend([f.replace(LISTENING_TO.replace('\\', '/'), '').lstrip('/') for f, _ in picowatch.internal_ls('/')])
+
+        line = readline.get_line_buffer().split('&')[-1].strip()
+
+        if line.startswith(tuple(commands)):
+            tabs = [f.replace(LISTENING_TO.replace('\\', '/'), '').lstrip('/') for f, _ in picowatch.internal_ls('/')]
+        elif line.startswith(tuple(tabs)):
+            tabs = ['&']
         
-        return ([x for x in tabs if x.startswith(text)] + [None])[state]
+        return ([x + ' ' for x in tabs if x.startswith(text)] + [None])[state]
 
     readline.set_completer(complete)
 except:
     pass
+
 
 while True:
     try:
