@@ -3,9 +3,14 @@ import os
 import re
 import json
 import time
+import socket
 import machine
 import network
+import uhashlib as hashlib
 import uasyncio as asyncio
+import ubinascii as binascii
+
+from websocket import websocket
 
 
 led = machine.Pin('LED', machine.Pin.OUT)
@@ -94,7 +99,8 @@ class Tf:
                 else:
                     item = Tz(item)
 
-                for pattern in [r'\<\?\=\s*(.*?)\s*\?\>', r'\{\s*(.*?)\s*\}']:
+                # , r'\{\s*(.*?)\s*\}'
+                for pattern in [r'\<\?\=\s*(.*?)\s*\?\>']:
                     content = re.sub(pattern, lambda match: str(eval(match.group(1) or '')), content)
 
                 echo += content
@@ -243,12 +249,82 @@ class HTTP:
             return HTTP.STATUS_NOT_FOUND
 
 
+class WebSocketConnection:
+
+    @property
+    def token(self) -> str:
+        return self.headers.get('Sec-WebSocket-Key', '')
+
+    @property
+    def token_digest(self) -> str:
+        d = hashlib.sha1(self.token)
+        d.update('258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+        
+        return (binascii.b2a_base64(d.digest())[:-1]).decode()
+    
+    def __init__(self, client: socket.socket, address: tuple[int, int]):
+        self.headers: dict[str, str] = {}
+
+        self._need_check: bool = False
+        self.client_close: bool = False
+        self.client: socket.socket = client
+        self.address: tuple[int, int] = address
+
+        self.ws = websocket(self.client, True)
+        # self.close_callback = close_callback
+
+        self.client.setblocking(False)
+        self.client.setsockopt(socket.SOL_SOCKET, 20, self.notify)
+
+    def notify(self, _):
+        self._need_check = True
+
+    def read(self):
+        if self._need_check:
+            self._check_socket_state()
+
+        msg_bytes = None
+        try:
+            msg_bytes = self.ws.read()
+        except OSError:
+            self.client_close = True
+
+        if not msg_bytes and self.client_close:
+            raise Exception('Connection closed')
+
+        return msg_bytes
+
+    def write(self, msg):
+        try:
+            self.ws.write(msg)
+        except OSError:
+            self.client_close = True
+
+    def _check_socket_state(self):
+        self._need_check = False
+        sock_str = str(self.socket)
+        state_str = sock_str.split(" ")[1]
+        state = int(state_str.split("=")[1])
+
+        if state == 4:
+            self.client_close = True
+
+    def is_closed(self):
+        return self.socket is None
+
+    def close(self):
+        self.socket.setsockopt(socket.SOL_SOCKET, 20, None)
+        self.socket.close()
+        self.socket = self.ws = None
+
 class RouterHTTP:
 
     def __init__(self, ssid: str, password: str, ignore_exception: bool = False):
-        self.mounts = {}
-        self.patterns  = {}
-        self.status_codes = {}
+        self.mounts: dict[str, str] = {}
+        self.patterns: dict[str, callable]  = {}
+        self.status_codes: dict[int, callable] = {}
+        self.websockets: list[tuple[socket.socket, callable]] = []
+        self.ws_connections: list[WebSocketConnection] = []
 
         self.wlan = network.WLAN(network.STA_IF)
         # activate the interface
@@ -256,8 +332,8 @@ class RouterHTTP:
         # connect to the access point with the ssid and password
         self.wlan.connect(ssid, password)
 
-        for c in range(0, 5):
-            time.sleep(1)
+        for c in range(0, 2):
+            time.sleep(5)
 
             if self.wlan.status() < 0 or self.wlan.status() >= 3:
                 break
@@ -267,11 +343,15 @@ class RouterHTTP:
                 raise RuntimeError('Connection failed to WiFi')
         else:
             self.ifconfig = self.wlan.ifconfig()
-            print(s := f'Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
-            print('-' * len(s))
+            print(f'$ Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
 
     def listen(self, port: int = 80):
-        asyncio.run(self.start_server(port))
+        # asyncio.run(self.start_server(port))
+
+        async def serve_forever():
+            await asyncio.gather(self.start_server(port), *[cb() for cb in self.websockets])
+        
+        asyncio.run(serve_forever())
 
     def listen_with_background_task(self, background_task: callable, port: int = 80):
         if not callable(background_task):
@@ -291,6 +371,61 @@ class RouterHTTP:
             
             return callback
         return decorator
+    
+    def websocket(self, port: int = 8000):
+        def decorator(callback: callable) -> callable[[HTTP]]:
+            def ccc(sock):
+                if connection := self.websocket_handshake(sock):
+                    return callback(connection)
+            
+            async def abb():
+                sock = socket.socket()
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(('0.0.0.0', port))
+                sock.listen(1)
+                sock.setsockopt(socket.SOL_SOCKET, 20, ccc)
+
+                for i in [network.STA_IF, network.AP_IF]:
+                    if network.WLAN(i).active():
+                        break
+                else:
+                    raise Exception(f'Unable to start WebSocket on ws://{self.ifconfig[0]}:{port}')
+            
+            self.websockets.append(abb)
+
+        return decorator
+    
+    def websocket_handshake(self, sock: socket.socket):
+        client, address = sock.accept()
+
+        try:
+            connection = WebSocketConnection(client, address)
+            stream = client.makefile('rwb', 0) 
+            line = stream.readline()
+
+            while True:
+                if not (line := stream.readline()) or line == b'\r\n':
+                    break
+
+                h, v = [x.strip().decode() for x in line.split(b':', 1)]
+                connection.headers[h] = v
+
+            if not connection.token:
+                raise Exception(f'"Sec-WebSocket-Key" not found in client<{address}>\'s headers!')
+            
+            headers = [
+                'HTTP/1.1 101 Switching Protocols', 
+                'Upgrade: websocket', 
+                'Connection: Upgrade', 
+                f'Sec-WebSocket-Accept: {connection.token_digest}'
+            ]
+            client.send(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
+        except Exception as e:
+            print(f'WebSocket Exception: {e}')
+            return client.close()
+        
+        self.ws_connections.append(connection)
+        return connection
     
     def mount(self, path: str, name: str = ''):
         try:

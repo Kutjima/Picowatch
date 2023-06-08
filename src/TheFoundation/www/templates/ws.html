@@ -4,21 +4,21 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>websocket</title>
 </head>
 <body>
     
 <script>
-const channel = 'ws://10.10.11.48:80';
+const channel = `ws://192.168.0.24:8000`;
 const websocket = new WebSocket(channel);
 var si = null;
 
 websocket.onopen = function(e) {
     console.log(`<b>[${channel}]</b><br /><span class="text-success">> connection opened</span><br />`);
 
-    si = setInterval(function() {
-        websocket.send('Ping');
-    }, 2000);
+    // si = setInterval(function() {
+    //     websocket.send('Ping');
+    // }, 2000);
 };
 websocket.onclose = function(e) {
     clearInterval(si);
