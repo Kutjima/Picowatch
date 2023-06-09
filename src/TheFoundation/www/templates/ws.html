@@ -16,19 +16,22 @@ var si = null;
 websocket.onopen = function(e) {
     console.log(`<b>[${channel}]</b><br /><span class="text-success">> connection opened</span><br />`);
 
-    // si = setInterval(function() {
-    //     websocket.send('Ping');
-    // }, 2000);
+    si = setInterval(function() {
+        websocket.send('Ping');
+    }, 2000);
 };
 websocket.onclose = function(e) {
     clearInterval(si);
     console.log(`<b>[${channel}]</b><br /><span class="text-warning">>> connection lost (retrying in 3 seconds...)</span><br />`);
+    websocket.close();
 };
 websocket.onerror = function(e) {
+    clearInterval(si);
     console.log(`<b>[${channel}]</b><br /><span class="text-warning">>> connection lost (an error occured)</span><br />`);
+    websocket.close();
 };
 websocket.onmessage = function(e) {
-    console.log(e.data, e);
+    console.log(e.data);
 };
 
 </script>

@@ -1,42 +1,47 @@
 import json
 
-from libs.routerhttp import asyncio, HTTP, RouterHTTP
+from libs.routerhttp import asyncio, HTTP, Websocket, RouterHTTP
 
+
+app = RouterHTTP()
 
 for crendential in json.load(open('/credentials.json')):
-    app = RouterHTTP(crendential['ssid'], crendential['password'], ignore_exception=True)
-
-    if app.wlan.isconnected():
+    if app.connect_wlan(crendential['ssid'], crendential['password']):
         break
 
-if app.wlan.isconnected() == False:
+if not app.is_connected:
     raise RuntimeError('Connection failed to WiFi')
 
 app.mount(path='/www/public', name='/public')
 
 
-@app.map(HTTP.STATUS_NOT_FOUND)
+@app.status(HTTP.STATUS_NOT_FOUND)
 def a(http: HTTP):
     http.response.content = 'Not Found me...'
 
-@app.map(HTTP.STATUS_INTERNAL_SERVER_ERROR)
+@app.status(HTTP.STATUS_INTERNAL_SERVER_ERROR)
 def b(http: HTTP):
     pass
 
-
-@app.map('GET|POST', '/')
+@app.http('GET|POST', '/')
 def c(http: HTTP) -> int:
     status, content = http.response.template('www/templates/ws.html')
 
     http.response.content = content
+
+    async def aaa():
+        for i in range(100):
+            print('bg:', i)
+            await asyncio.sleep(0.2)
+
+    http.add_background_task(aaa)
 
     if status:
         return HTTP.STATUS_OK
 
     return HTTP.STATUS_INTERNAL_SERVER_ERROR
 
-
-@app.map('GET|POST', '/template')
+@app.http('GET|POST', '/template')
 def d(http: HTTP) -> int:
     status, content = http.response.template('www/templates/index.html', {
         'metadata': {
@@ -62,8 +67,17 @@ def d(http: HTTP) -> int:
 
     return HTTP.STATUS_INTERNAL_SERVER_ERROR
 
-@app.websocket()
-def e(connection):
-    print(f"Connected by {connection}")
+Websocket.set_max_connections(2)
+
+@app.websocket(8000)
+async def e(websocket: Websocket):
+    while True:
+        if (message := websocket.recv()) is not None:
+            print('From:', websocket.IP, ' - ', message)
+            # websocket.send(str(websocket))
+            websocket.broadcast(str(websocket.connections_alive))
+        
+        # important to unlock connections
+        await asyncio.sleep(0)
 
 app.listen()

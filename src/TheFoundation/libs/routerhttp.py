@@ -10,7 +10,7 @@ import uhashlib as hashlib
 import uasyncio as asyncio
 import ubinascii as binascii
 
-from websocket import websocket
+from websocket import websocket as base_websocket
 
 
 led = machine.Pin('LED', machine.Pin.OUT)
@@ -207,6 +207,10 @@ class HTTP:
         self.request = self.Request()
         self.response = self.Response()
 
+    def add_background_task(self, callback: callable, kwargs: dict = {}):
+        loop = asyncio.get_event_loop()
+        loop.create_task(callback(**kwargs))
+
     class Request:
 
         def __init__(self):
@@ -249,7 +253,14 @@ class HTTP:
             return HTTP.STATUS_NOT_FOUND
 
 
-class WebSocketConnection:
+class WebsocketClosed(Exception):
+    pass
+
+
+class Websocket:
+
+    max_connections: int = -1
+    connections_alive: list['Websocket'] = []
 
     @property
     def token(self) -> str:
@@ -262,181 +273,173 @@ class WebSocketConnection:
         
         return (binascii.b2a_base64(d.digest())[:-1]).decode()
     
-    def __init__(self, client: socket.socket, address: tuple[int, int]):
+    @property
+    def socket_state(self) -> int:
+        if self.is_closed:
+            return 4
+
+        return int((str(self.__socket).split(' ')[1]).split('=')[1])
+
+    @property
+    def is_closed(self) -> bool:
+        return self.__socket is None
+    
+    @staticmethod
+    def broadcast(message: str):
+        for websocket in Websocket.connections_alive:
+            websocket.send(message)
+
+    @staticmethod
+    def is_enough() -> bool:
+        return Websocket.max_connections > 0 and len(Websocket.connections_alive) >= Websocket.max_connections
+    
+    @staticmethod
+    def set_max_connections(limit_count: int):
+        Websocket.max_connections = limit_count
+    
+    @staticmethod
+    async def close_dead_sockets():
+        while True:
+            for websocket in Websocket.connections_alive:
+                if websocket.is_closed:
+                    Websocket.connections_alive.remove(websocket)
+            
+            await asyncio.sleep(1)
+
+    def __init__(self, client: socket.socket, IP: tuple[str, int]):
+        self.IP = IP
         self.headers: dict[str, str] = {}
 
-        self._need_check: bool = False
-        self.client_close: bool = False
-        self.client: socket.socket = client
-        self.address: tuple[int, int] = address
+        self.__socket: socket.socket = client
+        self.__websocket: base_websocket = base_websocket(self.__socket, True)
+        self.__socket.setblocking(False)
+        self.__socket.setsockopt(socket.SOL_SOCKET, 20, self.__heartbeat)
 
-        self.ws = websocket(self.client, True)
-        # self.close_callback = close_callback
+    def __heartbeat(self, _):
+        if self.socket_state == 4:
+            self.close()
 
-        self.client.setblocking(False)
-        self.client.setsockopt(socket.SOL_SOCKET, 20, self.notify)
+    def open(self):
+        Websocket.connections_alive.append(self)
+        print('Connection opened:', str(self.IP))
 
-    def notify(self, _):
-        self._need_check = True
+    def recv(self, decode_to: str = 'utf-8'):
+        if self.socket_state == 4:
+            return self.close()
+        
+        if self.is_closed:
+            raise WebsocketClosed
 
-    def read(self):
-        if self._need_check:
-            self._check_socket_state()
-
-        msg_bytes = None
         try:
-            msg_bytes = self.ws.read()
+            if (message := self.__websocket.read()):
+                if decode_to:
+                    return message.decode(decode_to)
+
+                return message
         except OSError:
-            self.client_close = True
+            self.close()
 
-        if not msg_bytes and self.client_close:
-            raise Exception('Connection closed')
+    def send(self, message: str):
+        if self.is_closed:
+            raise WebsocketClosed
 
-        return msg_bytes
-
-    def write(self, msg):
         try:
-            self.ws.write(msg)
+            self.__websocket.write(message)
         except OSError:
-            self.client_close = True
-
-    def _check_socket_state(self):
-        self._need_check = False
-        sock_str = str(self.socket)
-        state_str = sock_str.split(" ")[1]
-        state = int(state_str.split("=")[1])
-
-        if state == 4:
-            self.client_close = True
-
-    def is_closed(self):
-        return self.socket is None
+            self.close()
 
     def close(self):
-        self.socket.setsockopt(socket.SOL_SOCKET, 20, None)
-        self.socket.close()
-        self.socket = self.ws = None
+        if self.__socket is not None:
+            print('Connection closed:', str(self.IP))
+            self.__socket.setsockopt(socket.SOL_SOCKET, 20, None)
+            self.__socket.close()
+            self.__socket = self.__websocket = None
 
-class RouterHTTP:
+            for websocket in Websocket.connections_alive:
+                if self is websocket:
+                    Websocket.connections_alive.remove(websocket)
 
-    def __init__(self, ssid: str, password: str, ignore_exception: bool = False):
-        self.mounts: dict[str, str] = {}
-        self.patterns: dict[str, callable]  = {}
-        self.status_codes: dict[int, callable] = {}
-        self.websockets: list[tuple[socket.socket, callable]] = []
-        self.ws_connections: list[WebSocketConnection] = []
+class RouterHTTP():
 
-        self.wlan = network.WLAN(network.STA_IF)
-        # activate the interface
+    @property
+    def is_connected(self) -> bool:
+        return self.wlan.isconnected()
+
+    def __init__(self):
+        self.wlan: network.WLAN = network.WLAN(network.STA_IF)
+        self.wlan.active(False)
+        self.hashmap: dict[str, dict] = {'http': {}, 'status': {}, 'static': {}, 'websocket': {}}
+
+    def connect_wlan(self, ssid: str, password: str) -> bool:
         self.wlan.active(True)
-        # connect to the access point with the ssid and password
         self.wlan.connect(ssid, password)
 
         for c in range(0, 2):
-            time.sleep(5)
+            time.sleep(1)
 
             if self.wlan.status() < 0 or self.wlan.status() >= 3:
                 break
 
-        if self.wlan.isconnected() == False:
-            if not ignore_exception:
-                raise RuntimeError('Connection failed to WiFi')
-        else:
+            time.sleep(4)
+
+        if self.wlan.isconnected():
             self.ifconfig = self.wlan.ifconfig()
             print(f'$ Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
 
-    def listen(self, port: int = 80):
-        # asyncio.run(self.start_server(port))
-
-        async def serve_forever():
-            await asyncio.gather(self.start_server(port), *[cb() for cb in self.websockets])
-        
-        asyncio.run(serve_forever())
-
-    def listen_with_background_task(self, background_task: callable, port: int = 80):
-        if not callable(background_task):
-            raise TypeError('background_task must be callable')
-        
-        async def serve_forever():
-            await asyncio.gather(self.start_server(port), background_task())
-        
-        asyncio.run(serve_forever())
-
-    def map(self, methods: str|int, pattern: str = ''):
-        def decorator(callback: callable) -> callable[[HTTP], int]:
-            if str(methods).isdigit() and int(methods) >= 400:
-                self.status_codes[int(methods)] = callback
-            else:
-                self.patterns[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
-            
-            return callback
-        return decorator
-    
-    def websocket(self, port: int = 8000):
-        def decorator(callback: callable) -> callable[[HTTP]]:
-            def ccc(sock):
-                if connection := self.websocket_handshake(sock):
-                    return callback(connection)
-            
-            async def abb():
-                sock = socket.socket()
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.bind(('0.0.0.0', port))
-                sock.listen(1)
-                sock.setsockopt(socket.SOL_SOCKET, 20, ccc)
-
-                for i in [network.STA_IF, network.AP_IF]:
-                    if network.WLAN(i).active():
-                        break
-                else:
-                    raise Exception(f'Unable to start WebSocket on ws://{self.ifconfig[0]}:{port}')
-            
-            self.websockets.append(abb)
-
-        return decorator
-    
-    def websocket_handshake(self, sock: socket.socket):
-        client, address = sock.accept()
-
-        try:
-            connection = WebSocketConnection(client, address)
-            stream = client.makefile('rwb', 0) 
-            line = stream.readline()
-
-            while True:
-                if not (line := stream.readline()) or line == b'\r\n':
-                    break
-
-                h, v = [x.strip().decode() for x in line.split(b':', 1)]
-                connection.headers[h] = v
-
-            if not connection.token:
-                raise Exception(f'"Sec-WebSocket-Key" not found in client<{address}>\'s headers!')
-            
-            headers = [
-                'HTTP/1.1 101 Switching Protocols', 
-                'Upgrade: websocket', 
-                'Connection: Upgrade', 
-                f'Sec-WebSocket-Accept: {connection.token_digest}'
-            ]
-            client.send(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
-        except Exception as e:
-            print(f'WebSocket Exception: {e}')
-            return client.close()
-        
-        self.ws_connections.append(connection)
-        return connection
+        return self.wlan.isconnected()
     
     def mount(self, path: str, name: str = ''):
         try:
             if (os.stat(path)[0] & 0x4000) != 0:
-                self.mounts[name if name != '' else path] = path
+                self.hashmap['static'][name if name != '' else path] = path
             else:
                 raise NotADirectoryError()
         except:
             raise Exception(f'"{path}" is not a valid directory!')
+    
+    def http(self, methods: str|int, pattern: str = ''):
+        def decorator(callback: callable) -> callable[[HTTP], int]:
+            self.hashmap['http'][pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
 
-    async def start_server(self, port: int = 80):        
+        return decorator
+
+    def status(self, status_code: int):
+        def decorator(callback: callable) -> callable[[HTTP], int]:
+            self.hashmap['status'][int(status_code)] = callback
+
+        return decorator
+    
+    def websocket(self, port: int):
+        def decorator(callback: callable) -> callable[[Websocket],]:
+            self.hashmap['websocket'][int(port)] = callback
+
+        return decorator
+
+    async def send(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):
+        led.value(1)
+
+        try:
+            headers = [f'HTTP/1.1 {status_code}']
+            http.response.content_headers['Content-type'] = http.response.content_type
+
+            for name, content in http.response.content_headers.items():
+                headers.append(f'{name}: {content}')
+                
+            writer.write(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
+            await writer.drain()
+            writer.write(bytes(http.response.content, 'utf-8'))
+            await writer.drain()
+        except Exception as e:
+            print(f'RouterHTTP.send("{http.request.url}"): {e}')
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            n = time.localtime()
+            print(f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
+        
+        led.value(0)
+
+    async def __start_webhttp(self, port: int = 80):
         async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
             gc.collect()
 
@@ -485,7 +488,7 @@ class RouterHTTP:
                     except:
                         return await self.send(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
                 elif http.request.method == 'GET':
-                    for name, path in self.mounts.items():
+                    for name, path in self.hashmap['static'].items():
                         if http.request.url.startswith(name):
                             try:
                                 if ((stat := os.stat(filename := f'{path}{http.request.url[len(name):]}'))[0] & 0x4000) == 0:
@@ -499,12 +502,12 @@ class RouterHTTP:
                             except:
                                 status_code = HTTP.STATUS_NOT_FOUND
 
-                                if status_code in self.status_codes:
-                                    self.status_codes[status_code](http)
+                                if status_code in self.hashmap['status']:
+                                    self.hashmap['status'][status_code](http)
 
                             return await self.send(writer, http, status_code)
 
-                for pattern, item in self.patterns.items():
+                for pattern, item in self.hashmap['http'].items():
                     if http.request.method not in item[0]:
                         continue
 
@@ -516,8 +519,8 @@ class RouterHTTP:
 
                         status_code = item[1](http, *args) or HTTP.STATUS_NO_CONTENT
 
-                if status_code in self.status_codes:
-                    self.status_codes[status_code](http)
+                if status_code in self.hashmap['status']:
+                    self.hashmap['status'][status_code](http)
 
                 return await self.send(writer, http, status_code)
             except OSError as e:
@@ -529,27 +532,74 @@ class RouterHTTP:
         async with (server := await asyncio.start_server(client_callback, self.ifconfig[0], port)):
             await shutdown_event.wait()
 
-    async def send(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):
-        led.value(1)
+    async def __start_websocket(self, port: int, callback: callable):
+        def handshake(sock: socket.socket):
+            if (client := self.__websocket_handshake(sock)):
+                loop = asyncio.get_event_loop()
+                loop.create_task(callback(client))
+
+        sock: socket.socket = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', port))
+        sock.listen(1)
+        sock.setsockopt(socket.SOL_SOCKET, 20, handshake)
+
+        for i in [network.STA_IF, network.AP_IF]:
+            if network.WLAN(i).active():
+                print(f'$ WebSocket started on ws://{self.ifconfig[0]}:{port}')
+                break
+        else:
+            raise Exception(f'$ Unable to start WebSocket on ws://{self.ifconfig[0]}:{port}')
+
+        # keep coroutine alive
+        await Websocket.close_dead_sockets()
+        
+    def __websocket_handshake(self, sock: socket.socket) -> Websocket:
+        client, address = sock.accept()
+
+        if Websocket.is_enough():
+            print('Connection refused:', str(address))
+            client.setblocking(True)
+            client.send(b'HTTP/1.1 503 Too many connections\r\n')
+            client.send(b'\r\n\r\n')
+            time.sleep(1)
+            
+            return client.close()
 
         try:
-            headers = [f'HTTP/1.1 {status_code}']
-            http.response.content_headers['Content-type'] = http.response.content_type
+            connection = Websocket(client, address)
+            stream = client.makefile('rwb', 0)
+            time.sleep(0.25)
+            line = stream.readline()
 
-            for name, content in http.response.content_headers.items():
-                headers.append(f'{name}: {content}')
-                
-            writer.write(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
-            await writer.drain()
-            writer.write(bytes(http.response.content, 'utf-8'))
-            await writer.drain()
-        except Exception as e:
-            print(f'RouterHTTP.send("{http.request.url}"): {e}')
-        finally:
-            writer.close()
-            await writer.wait_closed()
-            n = time.localtime()
+            while True:
+                if not (line := stream.readline()) or line == b'\r\n':
+                    break
+
+                h, v = [x.strip().decode() for x in line.split(b':', 1)]
+                connection.headers[h] = v
+
+            if not connection.token:
+                raise Exception(f'"Sec-WebSocket-Key" not found in client<{address}>\'s headers!')
             
-            print(f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
+            headers = [
+                'HTTP/1.1 101 Switching Protocols', 
+                'Upgrade: websocket', 
+                'Connection: Upgrade', 
+                f'Sec-WebSocket-Accept: {connection.token_digest}'
+            ]
+            client.send(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
+            connection.open()
+            
+            return connection
+        except Exception as e:
+            print(f'WebSocket Exception: {e}')
+            client.close()
+
+    def listen(self, port: int = 80):
+        async def serve_forever():
+            await asyncio.gather(self.__start_webhttp(port), *[self.__start_websocket(a, b) for a, b in self.hashmap['websocket'].items()])
         
-        led.value(0)
+        asyncio.run(serve_forever())
+
+
