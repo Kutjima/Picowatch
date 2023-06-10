@@ -1,12 +1,12 @@
 import json
 
-from libs.routerhttp import asyncio, HTTP, Websocket, RouterHTTP
+from libs.webapp import asyncio, HTTP, Websocket, RouterHTTP
 
 
 app = RouterHTTP()
 
 for crendential in json.load(open('/credentials.json')):
-    if app.connect_wlan(crendential['ssid'], crendential['password']):
+    if app.setup(crendential['ssid'], crendential['password'], timezone=2):
         break
 
 if not app.is_connected:
@@ -14,36 +14,23 @@ if not app.is_connected:
 
 app.mount(path='/www/public', name='/public')
 
-
-@app.status(HTTP.STATUS_NOT_FOUND)
-def a(http: HTTP):
-    http.response.content = 'Not Found me...'
-
-@app.status(HTTP.STATUS_INTERNAL_SERVER_ERROR)
-def b(http: HTTP):
-    pass
-
 @app.http('GET|POST', '/')
-def c(http: HTTP) -> int:
-    status, content = http.response.template('www/templates/ws.html')
-
+async def c(http: HTTP) -> int:
+    status_code, content = http.response.template('www/templates/ws.html')
     http.response.content = content
 
-    async def aaa():
-        for i in range(100):
-            print('bg:', i)
-            await asyncio.sleep(0.2)
+    # async def backg_task():
+    #     for i in range(100):
+    #         print('bg:', i)
+    #         await asyncio.sleep(0.2)
 
-    http.add_background_task(aaa)
+    # http.add_background_task(backg_task)
 
-    if status:
-        return HTTP.STATUS_OK
+    return status_code
 
-    return HTTP.STATUS_INTERNAL_SERVER_ERROR
-
-@app.http('GET|POST', '/template')
-def d(http: HTTP) -> int:
-    status, content = http.response.template('www/templates/index.html', {
+@app.http('GET|POST', '/templating')
+async def d(http: HTTP) -> int:
+    status_code, content = http.response.template('www/templates/index.html', {
         'metadata': {
             'uuid_0': {
                 'title': 'Hello World 1!',
@@ -61,11 +48,11 @@ def d(http: HTTP) -> int:
     })
 
     http.response.content = content
+    return status_code
 
-    if status:
-        return HTTP.STATUS_OK
-
-    return HTTP.STATUS_INTERNAL_SERVER_ERROR
+@app.http('GET|POST', '/download')
+async def d(http: HTTP) -> int:
+    return http.response.attachment('www/public/faviscon.png')
 
 Websocket.set_max_connections(2)
 
@@ -73,11 +60,24 @@ Websocket.set_max_connections(2)
 async def e(websocket: Websocket):
     while True:
         if (message := websocket.recv()) is not None:
-            print('From:', websocket.IP, ' - ', message)
+            # print('From:', websocket.IP, ' - ', message)
             # websocket.send(str(websocket))
             websocket.broadcast(str(websocket.connections_alive))
         
         # important to unlock connections
         await asyncio.sleep(0)
+
+@app.schedule(hour=3)
+async def f(name: str, local_time: tuple):
+    print('Triggered:', name, 'at:', local_time)
+    app.stop_schedule(name)
+    await asyncio.sleep(0)
+
+@app.schedule(name='aaa', second=0)
+async def f(name: str, local_time: tuple):
+    print('Triggered:', name, 'at:', local_time)
+    app.reschedule(name, second=5)
+    await asyncio.sleep(0)
+
 
 app.listen()

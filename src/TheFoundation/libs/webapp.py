@@ -6,6 +6,7 @@ import time
 import socket
 import machine
 import network
+import ntptime
 import uhashlib as hashlib
 import uasyncio as asyncio
 import ubinascii as binascii
@@ -19,6 +20,7 @@ led = machine.Pin('LED', machine.Pin.OUT)
 def url_decode(encoded: str):
     i = 0
     decoded: str = ''
+    encoded = encoded.replace('+', ' ')
 
     while i < len(encoded):
         if encoded[i] == '%':
@@ -204,6 +206,7 @@ class HTTP:
     }
 
     def __init__(self):
+        gc.collect()
         self.request = self.Request()
         self.response = self.Response()
 
@@ -230,11 +233,11 @@ class HTTP:
             self.content_type: str = 'text/html'
             self.content_headers: dict = {}
 
-        def template(self, content: str, context: dict = {}) -> tuple[bool, str]:
+        def template(self, content: str, context: dict = {}) -> tuple[int, str]:
             try:
-                return (True, Tf.echo(content, context))
+                return (HTTP.STATUS_OK, Tf.echo(content, context))
             except Exception as e:
-                return (False, f'Response.template("{content}"): {e}')
+                return (HTTP.STATUS_INTERNAL_SERVER_ERROR, f'Response.template("{content}"): {e}')
     
         def attachment(self, filename: str) -> int:
             try:
@@ -243,7 +246,7 @@ class HTTP:
                         self.content = f.read()
                         self.content_type = HTTP.HEADER_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream')
                         self.content_headers['Content-disposition'] = f'attachment; filename="{filename.split("/")[-1]}"'
-
+                    
                     return HTTP.STATUS_OK
                 else:
                     raise FileNotFoundError()
@@ -359,6 +362,7 @@ class Websocket:
                 if self is websocket:
                     Websocket.connections_alive.remove(websocket)
 
+
 class RouterHTTP():
 
     @property
@@ -368,15 +372,14 @@ class RouterHTTP():
     def __init__(self):
         self.wlan: network.WLAN = network.WLAN(network.STA_IF)
         self.wlan.active(False)
-        self.hashmap: dict[str, dict] = {'http': {}, 'status': {}, 'static': {}, 'websocket': {}}
+        self.hashmap: dict[str, dict] = {'http': {}, 'static': {}, 'websocket': {}, 'schedule': {}}
 
-    def connect_wlan(self, ssid: str, password: str) -> bool:
+    def setup(self, ssid: str, password: str, timezone: int = 0) -> bool:
         self.wlan.active(True)
         self.wlan.connect(ssid, password)
+        time.sleep(1)
 
-        for c in range(0, 2):
-            time.sleep(1)
-
+        for _ in range(0, 2):
             if self.wlan.status() < 0 or self.wlan.status() >= 3:
                 break
 
@@ -384,10 +387,11 @@ class RouterHTTP():
 
         if self.wlan.isconnected():
             self.ifconfig = self.wlan.ifconfig()
+            time.gmtime(ntptime.time() + (timezone * 3600))
             print(f'$ Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
 
         return self.wlan.isconnected()
-    
+
     def mount(self, path: str, name: str = ''):
         try:
             if (os.stat(path)[0] & 0x4000) != 0:
@@ -403,49 +407,40 @@ class RouterHTTP():
 
         return decorator
 
-    def status(self, status_code: int):
-        def decorator(callback: callable) -> callable[[HTTP], int]:
-            self.hashmap['status'][int(status_code)] = callback
-
-        return decorator
-    
     def websocket(self, port: int):
         def decorator(callback: callable) -> callable[[Websocket],]:
             self.hashmap['websocket'][int(port)] = callback
 
         return decorator
 
-    async def send(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):
-        led.value(1)
+    def schedule(self, month: int = -1, date: int = -1, hour: int = -1, minute: int = -1, second: int = -1, weekday: int = -1, name: str = ''):
+        seeds = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
-        try:
-            headers = [f'HTTP/1.1 {status_code}']
-            http.response.content_headers['Content-type'] = http.response.content_type
-
-            for name, content in http.response.content_headers.items():
-                headers.append(f'{name}: {content}')
-                
-            writer.write(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
-            await writer.drain()
-            writer.write(bytes(http.response.content, 'utf-8'))
-            await writer.drain()
-        except Exception as e:
-            print(f'RouterHTTP.send("{http.request.url}"): {e}')
-        finally:
-            writer.close()
-            await writer.wait_closed()
-            n = time.localtime()
-            print(f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
+        if not name:
+            name = ''.join([seeds[x] for x in [(os.urandom(1)[0] % len(seeds)) for _ in range(8)]])
+            
+        def decorator(callback: callable) -> callable:
+            self.hashmap['schedule'][name] = (month, date, hour, minute, second, weekday, callback)
         
-        led.value(0)
-
-    async def __start_webhttp(self, port: int = 80):
+        return decorator
+    
+    def reschedule(self, name: str, month: int = -1, date: int = -1, hour: int = -1, minute: int = -1, second: int = -1, weekday: int = -1):
+        try:
+            (_, _, _, _, _, _, callback) = self.hashmap['schedule'][name]
+            self.hashmap['schedule'][name] = (month, date, hour, minute, second, weekday, callback)
+        except:
+            pass
+    
+    def stop_schedule(self, name: str):
+        try:
+            del self.hashmap['schedule'][name]
+        except:
+            pass
+    
+    async def __init_https(self, port: int = 80):
         async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
-            gc.collect()
-
             try:
                 http = HTTP()
-                status_code = HTTP.STATUS_NOT_FOUND
 
                 while True:
                     if (line := (await reader.readline()).decode('utf-8').strip()) == '':
@@ -472,7 +467,7 @@ class RouterHTTP():
                         if (content_length := int(http.request.headers['content-length'])) > 0:
                             post_data = await reader.readexactly(content_length)
                     except:
-                        return await self.send(writer, http, HTTP.STATUS_LENGTH_REQUIRED)
+                        return await self.__handshake(writer, http, HTTP.STATUS_LENGTH_REQUIRED)
 
                     try:
                         content_type = str(http.request.headers['content-type']).lower()
@@ -486,7 +481,7 @@ class RouterHTTP():
                         else:
                             raise TypeError()
                     except:
-                        return await self.send(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
+                        return await self.__handshake(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
                 elif http.request.method == 'GET':
                     for name, path in self.hashmap['static'].items():
                         if http.request.url.startswith(name):
@@ -496,16 +491,12 @@ class RouterHTTP():
                                         http.response.content = fh.read()
                                         http.response.content_type = HTTP.HEADER_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream')
                                         http.response.content_headers['Content-Length'] = stat[6]
-                                        status_code = HTTP.STATUS_OK
+                                        
+                                    return await self.__handshake(writer, http, HTTP.STATUS_Ok)
                                 else:
                                     raise FileNotFoundError()
                             except:
-                                status_code = HTTP.STATUS_NOT_FOUND
-
-                                if status_code in self.hashmap['status']:
-                                    self.hashmap['status'][status_code](http)
-
-                            return await self.send(writer, http, status_code)
+                                return await self.__handshake(writer, http, HTTP.STATUS_NOT_FOUND)
 
                 for pattern, item in self.hashmap['http'].items():
                     if http.request.method not in item[0]:
@@ -517,12 +508,9 @@ class RouterHTTP():
                         if match:
                             args = [i for i in match.groups() if i is not None]
 
-                        status_code = item[1](http, *args) or HTTP.STATUS_NO_CONTENT
-
-                if status_code in self.hashmap['status']:
-                    self.hashmap['status'][status_code](http)
-
-                return await self.send(writer, http, status_code)
+                        return await self.__handshake(writer, http, await item[1](http, *args) or HTTP.STATUS_OK)
+                    
+                return await self.__handshake(writer, http, HTTP.STATUS_NOT_FOUND)
             except OSError as e:
                 print(f'RouterHTTP.client_callback(): {e}')
                 writer.close()
@@ -532,12 +520,58 @@ class RouterHTTP():
         async with (server := await asyncio.start_server(client_callback, self.ifconfig[0], port)):
             await shutdown_event.wait()
 
-    async def __start_websocket(self, port: int, callback: callable):
+    async def __handshake(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):
+        led.value(1)
+
+        try:
+            headers = [f'HTTP/1.1 {status_code}']
+            http.response.content_headers['Content-type'] = http.response.content_type
+
+            for name, content in http.response.content_headers.items():
+                headers.append(f'{name}: {content}')
+                
+            writer.write(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
+            await writer.drain()
+            writer.write(bytes(http.response.content, 'utf-8'))
+            await writer.drain()
+        except Exception as e:
+            print(f'RouterHTTP.__handshake("{http.request.url}"): {e}')
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            n = time.localtime()
+            print(f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
+        
+        led.value(0)
+
+    async def __init_schedules(self, clock_interval: int = 1):
+        n = time.localtime()
+        print(f'$ Schedules started at {n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2}')
+
+        while True:
+            if len(self.hashmap['schedule']) > 0:
+                _, cmonth, cdate, chour, cminute, csecond, cweekday, cdaynum = time.localtime()
+
+                for name, schedule in self.hashmap['schedule'].items():
+                    matched: int = 0
+                    (month, date, hour, minute, second, weekday, callback) = schedule
+
+                    for i, ci in [(month, cmonth), (date, cdate), (hour, chour), (minute, cminute), (second, csecond), (weekday, cweekday)]:
+                        if i == -1 or i == ci:
+                            matched += 1
+
+                    if matched == 6:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(callback(name, time.localtime()))
+
+            await asyncio.sleep(clock_interval)
+
+    async def __init_websockets(self, port: int, callback: callable):
         def handshake(sock: socket.socket):
             if (client := self.__websocket_handshake(sock)):
                 loop = asyncio.get_event_loop()
                 loop.create_task(callback(client))
-
+    
         sock: socket.socket = socket.socket()
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', port))
@@ -562,7 +596,7 @@ class RouterHTTP():
             client.setblocking(True)
             client.send(b'HTTP/1.1 503 Too many connections\r\n')
             client.send(b'\r\n\r\n')
-            time.sleep(1)
+            time.sleep(0.1)
             
             return client.close()
 
@@ -596,10 +630,12 @@ class RouterHTTP():
             print(f'WebSocket Exception: {e}')
             client.close()
 
-    def listen(self, port: int = 80):
+    def listen(self, port: int = 80, clock_interval: int = 1):
         async def serve_forever():
-            await asyncio.gather(self.__start_webhttp(port), *[self.__start_websocket(a, b) for a, b in self.hashmap['websocket'].items()])
+            await asyncio.gather(
+                self.__init_https(port),
+                self.__init_schedules(clock_interval),
+                *[self.__init_websockets(a, b) for a, b in self.hashmap['websocket'].items()]
+            )
         
         asyncio.run(serve_forever())
-
-
