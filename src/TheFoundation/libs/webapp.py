@@ -284,10 +284,10 @@ class WebSocketService:
 
         for i in [network.STA_IF, network.AP_IF]:
             if network.WLAN(i).active():
-                print(f'$ WebSocket service started on: {port}')
+                print(f'$ WebSocket service started on ws://{wifi.IP}:{port}')
                 break
         else:
-            raise Exception(f'$ Unable to start WebSocket service on: {port}')
+            raise Exception(f'$ Unable to start WebSocket service on ws://{wifi.IP}:{port}')
 
         while True:
             for websocket in self.websockets[wsid]:
@@ -395,18 +395,20 @@ class WebSocketService:
                     if self is websocket:
                         self.websockets.remove(websocket)
 
-        def recv(self, decode_to: str = 'utf-8'):
+        async def recv(self, decode_to: str = 'utf-8'):
             if self.socket_state == 4:
                 self.close()
+
+            while self.__websocket:
+                if (message := self.__websocket.read()):
+                    if decode_to:
+                        return message.decode(decode_to)
+
+                    return message
+                
+                await asyncio.sleep(0)
             
-            if self.is_closed:
-                raise WebSocketService.WebSocket.WebSocketDisconnect
-
-            if (message := self.__websocket.read()):
-                if decode_to:
-                    return message.decode(decode_to)
-
-                return message
+            raise WebSocketService.WebSocket.WebSocketDisconnect
 
         def send(self, message: str):
             if self.socket_state == 4:
@@ -515,6 +517,38 @@ class Schedule(CrontabService.Schedule):
     pass
 
 
+class WiFi:
+    
+    @property
+    def is_connected(self) -> bool:
+        return self.__wlan.isconnected()
+    
+    @property
+    def IP(self) -> str:
+        return self.__wlan.ifconfig()[0]
+    
+    def __init__(self):
+        self.__wlan: network.WLAN = network.WLAN(network.STA_IF)
+        self.__wlan.active(False)
+
+    def connect(self, ssid: str, password: str, timezone: int = 0) -> bool:
+        self.__wlan.active(True)
+        self.__wlan.connect(ssid, password)
+        time.sleep(1)
+
+        for _ in range(0, 2):
+            if self.__wlan.status() < 0 or self.__wlan.status() >= 3:
+                break
+
+            time.sleep(4)
+
+        if self.__wlan.isconnected():
+            time.gmtime(ntptime.time() + (timezone * 3600))
+            print(f'$ Connection succeeded to WiFi: {ssid}')
+
+        return self.__wlan.isconnected()
+
+wifi = WiFi()
 serv_crontab: CrontabService = CrontabService()
 serv_websocket: WebSocketService = WebSocketService()
 
@@ -523,34 +557,15 @@ class RouterHTTP:
 
     @property
     def is_connected(self) -> bool:
-        return self.wlan.isconnected()
+        return wifi.is_connected
 
     def __init__(self):
-        self.wlan: network.WLAN = network.WLAN(network.STA_IF)
-        self.wlan.active(False)
-        self.ifconfig = self.wlan.ifconfig()
-
         self.__https: dict[str, callable] = {}
         self.__statics: dict[str, callable] = {}
         self.__websockets: list = []
-
+    
     def setup(self, ssid: str, password: str, timezone: int = 0) -> bool:
-        self.wlan.active(True)
-        self.wlan.connect(ssid, password)
-        time.sleep(1)
-
-        for _ in range(0, 2):
-            if self.wlan.status() < 0 or self.wlan.status() >= 3:
-                break
-
-            time.sleep(4)
-
-        if self.wlan.isconnected():
-            self.ifconfig = self.wlan.ifconfig()
-            time.gmtime(ntptime.time() + (timezone * 3600))
-            print(f'$ Connection succeeded to WiFi = {ssid} with address = {self.ifconfig[0]}')
-
-        return self.wlan.isconnected()
+        return wifi.connect(ssid, password, timezone)
 
     def mount(self, path: str, name: str = ''):
         try:
@@ -659,7 +674,8 @@ class RouterHTTP:
             
         shutdown_event = asyncio.Event()
 
-        async with (server := await asyncio.start_server(client_callback, self.ifconfig[0], port)):
+        async with (server := await asyncio.start_server(client_callback, wifi.IP, port)):
+            print(f'$ RouterHTTP service started on: http://{wifi.IP}:{port}')
             await shutdown_event.wait()
 
     async def __send(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):

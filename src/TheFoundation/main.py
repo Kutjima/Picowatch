@@ -58,13 +58,10 @@ async def d(http: HTTP) -> int:
 async def e(websocket: WebSocket):
     while True:
         try:
-            if (message := websocket.recv()) is not None:
-                # print('From:', websocket.address, ' - ', message)
-                # websocket.send(str(websocket))
-                websocket.broadcast(str(websocket.websockets))
-            
-            # important to unlock connections
-            await asyncio.sleep(0)
+            message = await websocket.recv()
+            # print('From:', websocket.address, ' - ', message)
+            # websocket.send(str(websocket))
+            websocket.broadcast(str(websocket.websockets))
         except WebSocket.WebSocketDisconnect:
             break
         except Exception as e:
