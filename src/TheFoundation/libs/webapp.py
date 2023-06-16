@@ -649,7 +649,7 @@ class RouterHTTP:
                                         http.response.content_type = HTTP.HEADER_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream')
                                         http.response.content_headers['Content-Length'] = stat[6]
                                         
-                                    return await self.__send(writer, http, HTTP.STATUS_Ok)
+                                    return await self.__send(writer, http, HTTP.STATUS_OK)
                                 else:
                                     raise FileNotFoundError()
                             except:
@@ -674,7 +674,7 @@ class RouterHTTP:
             
         shutdown_event = asyncio.Event()
 
-        async with (server := await asyncio.start_server(client_callback, wifi.IP, port)):
+        async with (_ := await asyncio.start_server(client_callback, wifi.IP, port)):
             print(f'$ RouterHTTP service started on: http://{wifi.IP}:{port}')
             await shutdown_event.wait()
 

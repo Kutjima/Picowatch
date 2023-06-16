@@ -1,3 +1,4 @@
+import gc
 import json
 
 from libs.webapp import asyncio, HTTP, WebSocket, Schedule, RouterHTTP
@@ -75,9 +76,7 @@ async def f(schedule: Schedule):
 
 @app.schedule(second=0)
 async def f(schedule: Schedule):
-    print('Triggered:', schedule.name, 'at:', schedule.localtime)
-    schedule.next(second=5)
+    print('Free memory:', round(gc.mem_free() / 1024, 2), 'kb.')
     await asyncio.sleep(0)
-
 
 app.listen()
