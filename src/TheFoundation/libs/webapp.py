@@ -17,7 +17,7 @@ from websocket import websocket as base_websocket
 led = machine.Pin('LED', machine.Pin.OUT)
 
 
-def url_decode(encoded: str):
+def url_decode(encoded: str) -> str:
     i = 0
     decoded: str = ''
     encoded = encoded.replace('+', ' ')
@@ -32,6 +32,10 @@ def url_decode(encoded: str):
 
     return decoded
     
+
+def unique_id(length: int = 8, seeds: str = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') -> str:
+    return ''.join([seeds[x] for x in [(os.urandom(1)[0] % len(seeds)) for _ in range(0, length)]])
+
 
 class Tz:
 
@@ -256,114 +260,266 @@ class HTTP:
             return HTTP.STATUS_NOT_FOUND
 
 
-class WebsocketClosed(Exception):
-    pass
+class WebSocketService:
 
+    def __init__(self):
+        self.websockets: dict[str, list['WebSocketService.WebSocket']] = {}
 
-class Websocket:
-
-    max_connections: int = -1
-    connections_alive: list['Websocket'] = []
-
-    @property
-    def token(self) -> str:
-        return self.headers.get('Sec-WebSocket-Key', '')
-
-    @property
-    def token_digest(self) -> str:
-        d = hashlib.sha1(self.token)
-        d.update('258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    async def init(self, port: int, max_tasks: int, callback: callable):
+        self.websockets[(wsid := unique_id())] = []
         
-        return (binascii.b2a_base64(d.digest())[:-1]).decode()
-    
-    @property
-    def socket_state(self) -> int:
-        if self.is_closed:
-            return 4
+        def on_connect(sock: socket.socket):
+            if (websocket := self.handshake(sock, wsid, max_tasks)):
+                loop = asyncio.get_event_loop()
+                loop.create_task(callback(websocket))
 
-        return int((str(self.__socket).split(' ')[1]).split('=')[1])
+                if websocket not in self.websockets[wsid]:
+                    self.websockets[wsid].append(websocket)
+    
+        sock: socket.socket = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', port))
+        sock.listen(1)
+        sock.setsockopt(socket.SOL_SOCKET, 20, on_connect)
 
-    @property
-    def is_closed(self) -> bool:
-        return self.__socket is None
-    
-    @staticmethod
-    def broadcast(message: str):
-        for websocket in Websocket.connections_alive:
-            websocket.send(message)
+        for i in [network.STA_IF, network.AP_IF]:
+            if network.WLAN(i).active():
+                print(f'$ WebSocket service started on: {port}')
+                break
+        else:
+            raise Exception(f'$ Unable to start WebSocket service on: {port}')
 
-    @staticmethod
-    def is_enough() -> bool:
-        return Websocket.max_connections > 0 and len(Websocket.connections_alive) >= Websocket.max_connections
-    
-    @staticmethod
-    def set_max_connections(limit_count: int):
-        Websocket.max_connections = limit_count
-    
-    @staticmethod
-    async def close_dead_sockets():
         while True:
-            for websocket in Websocket.connections_alive:
+            for websocket in self.websockets[wsid]:
                 if websocket.is_closed:
-                    Websocket.connections_alive.remove(websocket)
+                    self.websockets[wsid].remove(websocket)
             
             await asyncio.sleep(1)
 
-    def __init__(self, client: socket.socket, IP: tuple[str, int]):
-        self.IP = IP
-        self.headers: dict[str, str] = {}
+    def handshake(self, sock: socket.socket, wsid: str, max_tasks: int = 2) -> 'WebSocketService.WebSocket':
+        client, address = sock.accept()
 
-        self.__socket: socket.socket = client
-        self.__websocket: base_websocket = base_websocket(self.__socket, True)
-        self.__socket.setblocking(False)
-        self.__socket.setsockopt(socket.SOL_SOCKET, 20, self.__heartbeat)
-
-    def __heartbeat(self, _):
-        if self.socket_state == 4:
-            self.close()
-
-    def open(self):
-        Websocket.connections_alive.append(self)
-        print('Connection opened:', str(self.IP))
-
-    def recv(self, decode_to: str = 'utf-8'):
-        if self.socket_state == 4:
-            return self.close()
-        
-        if self.is_closed:
-            raise WebsocketClosed
+        if max_tasks > 0 and len(self.websockets[wsid]) >= max_tasks:
+            print('Connection refused:', str(address))
+            client.setblocking(True)
+            client.send(b'HTTP/1.1 503 Too many connections\r\n')
+            client.send(b'\r\n\r\n')
+            time.sleep(0.1)
+            return client.close()
 
         try:
+            websocket = WebSocketService.WebSocket(wsid, client, address)
+            stream = client.makefile('rwb', 0)
+            time.sleep(0.25)
+            line = stream.readline()
+
+            while True:
+                if not (line := stream.readline()) or line == b'\r\n':
+                    break
+
+                h, v = [x.strip().decode() for x in line.split(b':', 1)]
+                websocket.headers[h] = v
+
+            if not websocket.token:
+                raise Exception(f'"Sec-WebSocket-Key" not found in client<{address}>\'s headers!')
+            
+            headers = [
+                'HTTP/1.1 101 Switching Protocols', 
+                'Upgrade: websocket', 
+                'Connection: Upgrade', 
+                f'Sec-WebSocket-Accept: {websocket.token_digest}'
+            ]
+            
+            client.send(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
+            print('Connection accepted:', str(websocket.address))
+
+            return websocket
+        except Exception as e:
+            print(f'WebSocket Exception: {e}')
+            return client.close()
+
+    class WebSocket:
+
+        @property
+        def token(self) -> str:
+            return self.headers.get('Sec-WebSocket-Key', '')
+
+        @property
+        def token_digest(self) -> str:
+            d = hashlib.sha1(self.token)
+            d.update('258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+            
+            return (binascii.b2a_base64(d.digest())[:-1]).decode()
+        
+        @property
+        def websockets(self) -> list['WebSocketService.WebSocket']:
+            return serv_websocket.websockets[self.__wsid]
+
+        @property
+        def is_opened(self) -> bool:
+            return self.__socket is not None
+        
+        @property
+        def is_closed(self) -> bool:
+            return self.__socket is None
+        
+        @property
+        def socket_state(self) -> int:
+            if self.is_closed:
+                return 4
+
+            return int((str(self.__socket).split(' ')[1]).split('=')[1])
+        
+        def __init__(self, wsid: str, client: socket.socket, address: tuple[str, int]):
+            self.address = address
+            self.headers: dict[str, str] = {}
+
+            self.__wsid = wsid
+            self.__socket: socket.socket = client
+            self.__websocket: base_websocket = base_websocket(self.__socket, True)
+            self.__socket.setblocking(False)
+            self.__socket.setsockopt(socket.SOL_SOCKET, 20, self.__heartbeat)
+
+        def __heartbeat(self, _):
+            if self.socket_state == 4:
+                self.close()
+
+        def close(self):
+            if self.__socket is not None:
+                print('Connection closed:', str(self.address))
+                self.__socket.setsockopt(socket.SOL_SOCKET, 20, None)
+                self.__socket.close()
+                self.__socket = self.__websocket = None
+
+                for websocket in self.websockets:
+                    if self is websocket:
+                        self.websockets.remove(websocket)
+
+        def recv(self, decode_to: str = 'utf-8'):
+            if self.socket_state == 4:
+                self.close()
+            
+            if self.is_closed:
+                raise WebSocketService.WebSocket.WebSocketDisconnect
+
             if (message := self.__websocket.read()):
                 if decode_to:
                     return message.decode(decode_to)
 
                 return message
-        except OSError:
-            self.close()
 
-    def send(self, message: str):
-        if self.is_closed:
-            raise WebsocketClosed
+        def send(self, message: str):
+            if self.socket_state == 4:
+                self.close()
 
-        try:
+            if self.is_closed:
+                raise WebSocketService.WebSocket.WebSocketDisconnect
+
             self.__websocket.write(message)
-        except OSError:
-            self.close()
 
-    def close(self):
-        if self.__socket is not None:
-            print('Connection closed:', str(self.IP))
-            self.__socket.setsockopt(socket.SOL_SOCKET, 20, None)
-            self.__socket.close()
-            self.__socket = self.__websocket = None
+        def broadcast(self, message: str):
+            for websocket in self.websockets:
+                try:
+                    websocket.send(message)
+                except:
+                    pass
+        
+        class WebSocketDisconnect(Exception):
 
-            for websocket in Websocket.connections_alive:
-                if self is websocket:
-                    Websocket.connections_alive.remove(websocket)
+            def __init__(self, code: int = 1000, reason: str = ''):
+                self.code = code
+                self.reason = reason
 
 
-class RouterHTTP():
+class WebSocket(WebSocketService.WebSocket):
+    pass
+
+
+class WebSocketDisconnect(WebSocketService.WebSocket.WebSocketDisconnect):
+    pass
+
+
+class CrontabService:
+        
+    @property
+    def datetime(self) -> str:
+        n = time.localtime()
+        return f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2}'
+    
+    def __init__(self):
+        self.schedules: list['CrontabService.Schedule'] = []
+
+    async def init(self, crontab_interval: int = 1):
+        print(f'$ Crontab service started at: {self.datetime}')
+
+        while True:
+            if len(self.schedules) > 0:
+                _, month, date, hour, minute, second, weekday, _ = time.localtime()
+
+                for schedule in self.schedules:
+                    if schedule.state == True:
+                        matched = 0
+
+                        for x, y in [
+                            (month, schedule.month), (date, schedule.date), (hour, schedule.hour), 
+                            (minute, schedule.minute), (second, schedule.second), (weekday, schedule.weekday),
+                        ]:
+                            matched += int(y == -1 or x == y)
+
+                        if matched == 6:
+                            loop = asyncio.get_event_loop()
+                            loop.create_task(schedule.callback(schedule))
+                    else:
+                        self.schedules.remove(schedule)
+
+            await asyncio.sleep(crontab_interval)
+
+    class Schedule:
+
+        @property
+        def datetime(self) -> str:
+            n = time.localtime()
+            return f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2}'
+
+        @property
+        def localtime(self) -> tuple:
+            return time.localtime()
+
+        def __init__(self, name: str, callback: callable, month: int = -1, date: int = -1, hour: int = -1, minute: int = -1, second: int = -1, weekday: int = -1):
+            self.name: str = name
+            self.state: bool = True
+            self.callback: callable = callback
+
+            self.month: int = int(month)
+            self.date: int = int(date)
+            self.hour: int = int(hour)
+            self.minute: int = int(minute)
+            self.second: int = int(second)
+            self.weekday: int = int(weekday)
+
+        def next(self, month: int = -1, date: int = -1, hour: int = -1, minute: int = -1, second: int = -1, weekday: int = -1):
+            self.state: bool = True
+
+            self.month: int = int(month)
+            self.date: int = int(date)
+            self.hour: int = int(hour)
+            self.minute: int = int(minute)
+            self.second: int = int(second)
+            self.weekday: int = int(weekday)
+        
+        def stop(self):
+            self.state = False
+
+
+class Schedule(CrontabService.Schedule):
+    pass
+
+
+serv_crontab: CrontabService = CrontabService()
+serv_websocket: WebSocketService = WebSocketService()
+
+
+class RouterHTTP:
 
     @property
     def is_connected(self) -> bool:
@@ -372,7 +528,11 @@ class RouterHTTP():
     def __init__(self):
         self.wlan: network.WLAN = network.WLAN(network.STA_IF)
         self.wlan.active(False)
-        self.hashmap: dict[str, dict] = {'http': {}, 'static': {}, 'websocket': {}, 'schedule': {}}
+        self.ifconfig = self.wlan.ifconfig()
+
+        self.__https: dict[str, callable] = {}
+        self.__statics: dict[str, callable] = {}
+        self.__websockets: list = []
 
     def setup(self, ssid: str, password: str, timezone: int = 0) -> bool:
         self.wlan.active(True)
@@ -388,14 +548,14 @@ class RouterHTTP():
         if self.wlan.isconnected():
             self.ifconfig = self.wlan.ifconfig()
             time.gmtime(ntptime.time() + (timezone * 3600))
-            print(f'$ Connection succeeded to WiFi = {ssid} with IP = {self.ifconfig[0]}')
+            print(f'$ Connection succeeded to WiFi = {ssid} with address = {self.ifconfig[0]}')
 
         return self.wlan.isconnected()
 
     def mount(self, path: str, name: str = ''):
         try:
             if (os.stat(path)[0] & 0x4000) != 0:
-                self.hashmap['static'][name if name != '' else path] = path
+                self.__statics[name if name != '' else path] = path
             else:
                 raise NotADirectoryError()
         except:
@@ -403,41 +563,23 @@ class RouterHTTP():
     
     def http(self, methods: str|int, pattern: str = ''):
         def decorator(callback: callable) -> callable[[HTTP], int]:
-            self.hashmap['http'][pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
+            self.__https[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
 
         return decorator
 
-    def websocket(self, port: int):
-        def decorator(callback: callable) -> callable[[Websocket],]:
-            self.hashmap['websocket'][int(port)] = callback
+    def websocket(self, port: int, max_tasks: int = 2):
+        def decorator(callback: callable) -> callable[[WebSocket],]:
+            self.__websockets.append((int(port), max_tasks, callback))
 
         return decorator
 
     def schedule(self, month: int = -1, date: int = -1, hour: int = -1, minute: int = -1, second: int = -1, weekday: int = -1, name: str = ''):
-        seeds = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-
-        if not name:
-            name = ''.join([seeds[x] for x in [(os.urandom(1)[0] % len(seeds)) for _ in range(8)]])
-            
-        def decorator(callback: callable) -> callable:
-            self.hashmap['schedule'][name] = (month, date, hour, minute, second, weekday, callback)
+        def decorator(callback: callable) -> callable[[str, tuple],]:
+            serv_crontab.schedules.append(CrontabService.Schedule(name or unique_id(), callback, month, date, hour, minute, second, weekday))
         
         return decorator
     
-    def reschedule(self, name: str, month: int = -1, date: int = -1, hour: int = -1, minute: int = -1, second: int = -1, weekday: int = -1):
-        try:
-            (_, _, _, _, _, _, callback) = self.hashmap['schedule'][name]
-            self.hashmap['schedule'][name] = (month, date, hour, minute, second, weekday, callback)
-        except:
-            pass
-    
-    def stop_schedule(self, name: str):
-        try:
-            del self.hashmap['schedule'][name]
-        except:
-            pass
-    
-    async def __init_https(self, port: int = 80):
+    async def init(self, port: int = 80):
         async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
             try:
                 http = HTTP()
@@ -467,7 +609,7 @@ class RouterHTTP():
                         if (content_length := int(http.request.headers['content-length'])) > 0:
                             post_data = await reader.readexactly(content_length)
                     except:
-                        return await self.__handshake(writer, http, HTTP.STATUS_LENGTH_REQUIRED)
+                        return await self.__send(writer, http, HTTP.STATUS_LENGTH_REQUIRED)
 
                     try:
                         content_type = str(http.request.headers['content-type']).lower()
@@ -481,9 +623,9 @@ class RouterHTTP():
                         else:
                             raise TypeError()
                     except:
-                        return await self.__handshake(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
+                        return await self.__send(writer, http, HTTP.STATUS_UNSUPPORTED_MEDIA_TYPE)
                 elif http.request.method == 'GET':
-                    for name, path in self.hashmap['static'].items():
+                    for name, path in self.__statics.items():
                         if http.request.url.startswith(name):
                             try:
                                 if ((stat := os.stat(filename := f'{path}{http.request.url[len(name):]}'))[0] & 0x4000) == 0:
@@ -492,13 +634,13 @@ class RouterHTTP():
                                         http.response.content_type = HTTP.HEADER_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream')
                                         http.response.content_headers['Content-Length'] = stat[6]
                                         
-                                    return await self.__handshake(writer, http, HTTP.STATUS_Ok)
+                                    return await self.__send(writer, http, HTTP.STATUS_Ok)
                                 else:
                                     raise FileNotFoundError()
                             except:
-                                return await self.__handshake(writer, http, HTTP.STATUS_NOT_FOUND)
+                                return await self.__send(writer, http, HTTP.STATUS_NOT_FOUND)
 
-                for pattern, item in self.hashmap['http'].items():
+                for pattern, item in self.__https.items():
                     if http.request.method not in item[0]:
                         continue
 
@@ -508,9 +650,9 @@ class RouterHTTP():
                         if match:
                             args = [i for i in match.groups() if i is not None]
 
-                        return await self.__handshake(writer, http, await item[1](http, *args) or HTTP.STATUS_OK)
+                        return await self.__send(writer, http, await item[1](http, *args) or HTTP.STATUS_OK)
                     
-                return await self.__handshake(writer, http, HTTP.STATUS_NOT_FOUND)
+                return await self.__send(writer, http, HTTP.STATUS_NOT_FOUND)
             except OSError as e:
                 print(f'RouterHTTP.client_callback(): {e}')
                 writer.close()
@@ -520,7 +662,7 @@ class RouterHTTP():
         async with (server := await asyncio.start_server(client_callback, self.ifconfig[0], port)):
             await shutdown_event.wait()
 
-    async def __handshake(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):
+    async def __send(self, writer: asyncio.StreamWriter, http: HTTP, status_code: int):
         led.value(1)
 
         try:
@@ -535,107 +677,20 @@ class RouterHTTP():
             writer.write(bytes(http.response.content, 'utf-8'))
             await writer.drain()
         except Exception as e:
-            print(f'RouterHTTP.__handshake("{http.request.url}"): {e}')
+            print(f'RouterHTTP.__send("{http.request.url}"): {e}')
         finally:
             writer.close()
             await writer.wait_closed()
-            n = time.localtime()
-            print(f'{n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
+            print(f'{serv_crontab.datetime} - {http.request.method} {status_code} {http.request.url} ({http.response.content_type})')
         
         led.value(0)
-
-    async def __init_schedules(self, clock_interval: int = 1):
-        n = time.localtime()
-        print(f'$ Schedules started at {n[0]}/{n[1]:0>2}/{n[2]:0>2} {n[3]:0>2}:{n[4]:0>2}:{n[5]:0>2}')
-
-        while True:
-            if len(self.hashmap['schedule']) > 0:
-                _, cmonth, cdate, chour, cminute, csecond, cweekday, cdaynum = time.localtime()
-
-                for name, schedule in self.hashmap['schedule'].items():
-                    matched: int = 0
-                    (month, date, hour, minute, second, weekday, callback) = schedule
-
-                    for i, ci in [(month, cmonth), (date, cdate), (hour, chour), (minute, cminute), (second, csecond), (weekday, cweekday)]:
-                        if i == -1 or i == ci:
-                            matched += 1
-
-                    if matched == 6:
-                        loop = asyncio.get_event_loop()
-                        loop.create_task(callback(name, time.localtime()))
-
-            await asyncio.sleep(clock_interval)
-
-    async def __init_websockets(self, port: int, callback: callable):
-        def handshake(sock: socket.socket):
-            if (client := self.__websocket_handshake(sock)):
-                loop = asyncio.get_event_loop()
-                loop.create_task(callback(client))
-    
-        sock: socket.socket = socket.socket()
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', port))
-        sock.listen(1)
-        sock.setsockopt(socket.SOL_SOCKET, 20, handshake)
-
-        for i in [network.STA_IF, network.AP_IF]:
-            if network.WLAN(i).active():
-                print(f'$ WebSocket started on ws://{self.ifconfig[0]}:{port}')
-                break
-        else:
-            raise Exception(f'$ Unable to start WebSocket on ws://{self.ifconfig[0]}:{port}')
-
-        # keep coroutine alive
-        await Websocket.close_dead_sockets()
         
-    def __websocket_handshake(self, sock: socket.socket) -> Websocket:
-        client, address = sock.accept()
-
-        if Websocket.is_enough():
-            print('Connection refused:', str(address))
-            client.setblocking(True)
-            client.send(b'HTTP/1.1 503 Too many connections\r\n')
-            client.send(b'\r\n\r\n')
-            time.sleep(0.1)
-            
-            return client.close()
-
-        try:
-            connection = Websocket(client, address)
-            stream = client.makefile('rwb', 0)
-            time.sleep(0.25)
-            line = stream.readline()
-
-            while True:
-                if not (line := stream.readline()) or line == b'\r\n':
-                    break
-
-                h, v = [x.strip().decode() for x in line.split(b':', 1)]
-                connection.headers[h] = v
-
-            if not connection.token:
-                raise Exception(f'"Sec-WebSocket-Key" not found in client<{address}>\'s headers!')
-            
-            headers = [
-                'HTTP/1.1 101 Switching Protocols', 
-                'Upgrade: websocket', 
-                'Connection: Upgrade', 
-                f'Sec-WebSocket-Accept: {connection.token_digest}'
-            ]
-            client.send(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
-            connection.open()
-            
-            return connection
-        except Exception as e:
-            print(f'WebSocket Exception: {e}')
-            client.close()
-
-    def listen(self, port: int = 80, clock_interval: int = 1):
+    def listen(self, port: int = 80, crontab_interval: int = 1):
         async def serve_forever():
             await asyncio.gather(
-                self.__init_https(port),
-                self.__init_schedules(clock_interval),
-                *[self.__init_websockets(a, b) for a, b in self.hashmap['websocket'].items()]
+                self.init(port),
+                serv_crontab.init(crontab_interval),
+                *[serv_websocket.init(port, max_tasks, callback) for port, max_tasks, callback in self.__websockets]
             )
         
         asyncio.run(serve_forever())

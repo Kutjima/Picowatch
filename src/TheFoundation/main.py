@@ -1,6 +1,6 @@
 import json
 
-from libs.webapp import asyncio, HTTP, Websocket, RouterHTTP
+from libs.webapp import asyncio, HTTP, WebSocket, Schedule, RouterHTTP
 
 
 app = RouterHTTP()
@@ -14,7 +14,7 @@ if not app.is_connected:
 
 app.mount(path='/www/public', name='/public')
 
-@app.http('GET|POST', '/')
+@app.http(methods='GET|POST', pattern='/')
 async def c(http: HTTP) -> int:
     status_code, content = http.response.template('www/templates/ws.html')
     http.response.content = content
@@ -28,7 +28,7 @@ async def c(http: HTTP) -> int:
 
     return status_code
 
-@app.http('GET|POST', '/templating')
+@app.http(methods='GET|POST', pattern='/templating')
 async def d(http: HTTP) -> int:
     status_code, content = http.response.template('www/templates/index.html', {
         'metadata': {
@@ -50,33 +50,36 @@ async def d(http: HTTP) -> int:
     http.response.content = content
     return status_code
 
-@app.http('GET|POST', '/download')
+@app.http(methods='GET|POST', pattern='/download')
 async def d(http: HTTP) -> int:
     return http.response.attachment('www/public/faviscon.png')
 
-Websocket.set_max_connections(2)
-
-@app.websocket(8000)
-async def e(websocket: Websocket):
+@app.websocket(port=8000, max_tasks=2)
+async def e(websocket: WebSocket):
     while True:
-        if (message := websocket.recv()) is not None:
-            # print('From:', websocket.IP, ' - ', message)
-            # websocket.send(str(websocket))
-            websocket.broadcast(str(websocket.connections_alive))
-        
-        # important to unlock connections
-        await asyncio.sleep(0)
+        try:
+            if (message := websocket.recv()) is not None:
+                # print('From:', websocket.address, ' - ', message)
+                # websocket.send(str(websocket))
+                websocket.broadcast(str(websocket.websockets))
+            
+            # important to unlock connections
+            await asyncio.sleep(0)
+        except WebSocket.WebSocketDisconnect:
+            break
+        except Exception as e:
+            print(str(e))
 
 @app.schedule(hour=3)
-async def f(name: str, local_time: tuple):
-    print('Triggered:', name, 'at:', local_time)
-    app.stop_schedule(name)
+async def f(schedule: Schedule):
+    print('Triggered:', schedule.name, 'at:', schedule.localtime)
+    schedule.stop()
     await asyncio.sleep(0)
 
-@app.schedule(name='aaa', second=0)
-async def f(name: str, local_time: tuple):
-    print('Triggered:', name, 'at:', local_time)
-    app.reschedule(name, second=5)
+@app.schedule(second=0)
+async def f(schedule: Schedule):
+    print('Triggered:', schedule.name, 'at:', schedule.localtime)
+    schedule.next(second=5)
     await asyncio.sleep(0)
 
 
