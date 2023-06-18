@@ -14,7 +14,7 @@ const websocket = new WebSocket(channel);
 var si = null;
 
 websocket.onopen = function(e) {
-    console.log(`<b>[${channel}]</b><br /><span class="text-success">> connection opened</span><br />`);
+    console.log(`${channel} > connection opened!`);
 
     si = setInterval(function() {
         websocket.send('Ping');
@@ -22,12 +22,12 @@ websocket.onopen = function(e) {
 };
 websocket.onclose = function(e) {
     clearInterval(si);
-    console.log(`<b>[${channel}]</b><br /><span class="text-warning">>> connection lost (retrying in 3 seconds...)</span><br />`);
+    console.log(`${channel}] > connection lost!`);
     websocket.close();
 };
 websocket.onerror = function(e) {
     clearInterval(si);
-    console.log(`<b>[${channel}]</b><br /><span class="text-warning">>> connection lost (an error occured)</span><br />`);
+    console.log(`${channel}] >> connection lost (an error occured)`);
     websocket.close();
 };
 websocket.onmessage = function(e) {
