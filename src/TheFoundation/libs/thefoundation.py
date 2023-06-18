@@ -14,57 +14,72 @@ import ubinascii as binascii
 from websocket import websocket as base_websocket
 
 
-HTTP_STATUS_OK: int = 200
-HTTP_STATUS_NO_CONTENT: int = 204
-HTTP_STATUS_TEMPORARY_REDIRECT: int = 307
-HTTP_STATUS_PERMANENT_REDIRECT: int = 308
-HTTP_STATUS_BAD_REQUEST: int = 400
-HTTP_STATUS_UNAUTHORIZED: int = 401
-HTTP_STATUS_FORBIDDEN: int = 403
-HTTP_STATUS_NOT_FOUND: int = 404
-HTTP_STATUS_LENGTH_REQUIRED: int = 411
-HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE: int = 415
-HTTP_STATUS_UNPROCESSABLE_ENTITY: int = 422
-HTTP_STATUS_INTERNAL_SERVER_ERROR: int = 500
-HTTP_STATUS_TEXT: dict[int, str] = {
-    HTTP_STATUS_OK: '200 OK',
-    HTTP_STATUS_NO_CONTENT: '204 No Content',
-    HTTP_STATUS_TEMPORARY_REDIRECT: '307 Temporary Redirect',
-    HTTP_STATUS_PERMANENT_REDIRECT: '308 Permanent Redirect',
-    HTTP_STATUS_BAD_REQUEST: '400 Bad Request',
-    HTTP_STATUS_UNAUTHORIZED: '401 Unauthorized',
-    HTTP_STATUS_FORBIDDEN: '403 Forbidden',
-    HTTP_STATUS_NOT_FOUND: '404 Not Found',
-    HTTP_STATUS_LENGTH_REQUIRED: '411 Length Required',
-    HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE: '415 Unsupported Media Type',
-    HTTP_STATUS_UNPROCESSABLE_ENTITY: '422 Unprocessable Entity',
-    HTTP_STATUS_INTERNAL_SERVER_ERROR: '500 Internal Server Error',
-}
-HTTP_RESPONSE_CONTENT_TYPE: dict[str, str] = {
-    'html': 'text/html',
-    'css': 'text/css',
-    'js': 'application/javascript',
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'png': 'image/png',
-    'gif': 'image/gif',
-    'webp': 'image/webp',
-    'ico': 'image/x-icon',
-    'svg': 'image/svg+xml',
-    'json': 'application/json',
-    'xml': 'application/xml',
-    'pdf': 'application/pdf',
-    'zip': 'application/zip',
-    'txt': 'text/plain',
-    'csv': 'text/csv',
-    'mp3': 'audio/mpeg',
-    'mp4': 'video/mp4',
-    'wav': 'audio/wav',
-    'ogg': 'audio/ogg',
-    'webm': 'video/webm',
-}
+class status:
 
-led = machine.Pin('LED', machine.Pin.OUT)
+    STATUS_200_OK: int = 200
+    STATUS_204_NO_CONTENT: int = 204
+    STATUS_307_TEMPORARY_REDIRECT: int = 307
+    STATUS_308_PERMANENT_REDIRECT: int = 308
+    STATUS_400_BAD_REQUEST: int = 400
+    STATUS_401_UNAUTHORIZED: int = 401
+    STATUS_403_FORBIDDEN: int = 403
+    STATUS_404_NOT_FOUND: int = 404
+    STATUS_411_LENGTH_REQUIRED: int = 411
+    STATUS_415_UNSUPPORTED_MEDIA_TYPE: int = 415
+    STATUS_422_UNPROCESSABLE_ENTITY: int = 422
+    STATUS_500_INTERNAL_SERVER_ERROR: int = 500
+    STATUS_501_NOT_IMPLEMENTED: int = 501
+
+    STATUS_TEXTS: dict[int, str] = {
+        STATUS_200_OK: 'HTTP/1.1 200 OK',
+        STATUS_204_NO_CONTENT: 'HTTP/1.1 204 No Content',
+        STATUS_307_TEMPORARY_REDIRECT: 'HTTP/1.1 307 Temporary Redirect',
+        STATUS_308_PERMANENT_REDIRECT: 'HTTP/1.1 308 Permanent Redirect',
+        STATUS_400_BAD_REQUEST: 'HTTP/1.1 400 Bad Request',
+        STATUS_401_UNAUTHORIZED: 'HTTP/1.1 401 Unauthorized',
+        STATUS_403_FORBIDDEN: 'HTTP/1.1 403 Forbidden',
+        STATUS_404_NOT_FOUND: 'HTTP/1.1 404 Not Found',
+        STATUS_411_LENGTH_REQUIRED: 'HTTP/1.1 411 Length Required',
+        STATUS_415_UNSUPPORTED_MEDIA_TYPE: 'HTTP/1.1 415 Unsupported Media Type',
+        STATUS_422_UNPROCESSABLE_ENTITY: 'HTTP/1.1 422 Unprocessable Entity',
+        STATUS_500_INTERNAL_SERVER_ERROR: 'HTTP/1.1 500 Internal Server Error',
+        STATUS_501_NOT_IMPLEMENTED: 'HTTP/1.1 500 Not Implemented',
+    }
+
+    @staticmethod
+    def text(status_code: int) -> str:
+        return status.STATUS_TEXTS.get(status_code, f'HTTP/1.1 {status_code} Unknown Status Code')
+    
+
+class media:
+
+    CONTENT_TYPES: dict[str, str] = {
+        'html': 'text/html',
+        'css': 'text/css',
+        'js': 'application/javascript',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'ico': 'image/x-icon',
+        'svg': 'image/svg+xml',
+        'json': 'application/json',
+        'xml': 'application/xml',
+        'pdf': 'application/pdf',
+        'zip': 'application/zip',
+        'txt': 'text/plain',
+        'csv': 'text/csv',
+        'mp3': 'audio/mpeg',
+        'mp4': 'video/mp4',
+        'wav': 'audio/wav',
+        'ogg': 'audio/ogg',
+        'webm': 'video/webm',
+    }
+
+    @staticmethod
+    def type(extension: str) -> str:
+        return media.CONTENT_TYPES.get(extension.lower(), 'application/octet-stream')
 
 
 def url_decode(encoded: str) -> str:
@@ -266,7 +281,7 @@ class HTTPService:
         except:
             raise Exception(f'"{path}" is not a valid directory!')
         
-    def map(self, methods: str, pattern: str, callback: callable) -> callable[[Request], int]:
+    def map(self, methods: str, pattern: str, callback: callable) -> callable[[Request], str]:
         self.__items[pattern] = (list(map(lambda s: s.strip(), methods.upper().split('|'))), callback)
         return callback
     
@@ -274,84 +289,71 @@ class HTTPService:
         async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
             try:
                 gc.collect()
-                request = Request()
+                url: str = ''
+                method: str = 'GET'
+                headers_sent: dict = {}
+                post_data: dict = {}
+                query_param: dict = {}
 
                 while True:
                     if (line := (await reader.readline()).decode('utf-8').strip()) == '':
                         break
 
-                    if len(request.headers) == 0:
+                    if len(headers_sent) == 0:
                         if (match := re.compile(r'(GET|POST)\s+([^\s]+)\s+HTTP').search(line)):
                             if len(uu := match.group(2).split('?')) == 2:
                                 for pp in uu[1].split('&'):
                                     if len(p := pp.split('=')) == 2:
-                                        request.params[url_decode(p[0])] = url_decode(p[1])
+                                        query_param[url_decode(p[0])] = url_decode(p[1])
 
-                            request.url = uu[0]
-                            request.method = match.group(1)
+                            url = uu[0]
+                            method = match.group(1)
                     
                     if len(splitted_line := line.split(': ')) == 2:
-                        request.headers[str(splitted_line[0]).lower()] = splitted_line[1]
+                        headers_sent[str(splitted_line[0]).lower()] = splitted_line[1]
 
-                if not request.url:
+                if not url:
                     return
+
+                request = HTTPService.Request(url, method, headers_sent, post_data, query_param)
+
+                for name, path in self.__static_items.items():
+                    if url.startswith(name):
+                        try:
+                            if ((stat := os.stat(filename := f'{path}{url[len(name):]}'))[0] & 0x4000) == 0:
+                                request.content = open(filename, 'rb').read()
+                                request.headers['Content-Type'] = media.type(filename.split('.')[-1])
+                                request.headers['Content-Length'] = stat[6]
+                                request.status_code = status.STATUS_200_OK
+
+                                return await self.send(writer, request)
+                            else:
+                                raise FileExistsError
+                        except Exception as e:
+                            return await self.send(writer, request, status.STATUS_404_NOT_FOUND)
                 
-                if request.method == 'POST':            
+                if method == 'POST':            
                     try:
-                        if (content_length := int(request.headers['content-length'])) > 0:
-                            post_data = await reader.readexactly(content_length)
-                    except:
-                        return await self.send(
-                            writer=writer, 
-                            request=request.update(
-                                status_code=HTTP_STATUS_LENGTH_REQUIRED
-                            )
-                        )
+                        if (content_length := int(headers_sent['content-length'])) > 0:
+                            stream = await reader.readexactly(content_length)
 
-                    try:
-                        content_type = str(request.headers['content-type']).lower()
-
-                        if 'application/x-www-form-urlencoded' in content_type:
-                            for p in post_data.decode('utf-8').split('&'):
-                                k, v = p.split('=')
-                                request.post_data[url_decode(k)] = url_decode(v)
-                        elif 'application/json' in content_type:
-                            request.post_data = json.loads(post_data)
-                        else:
-                            raise TypeError
-                    except:
-                        return await self.send(
-                            writer=writer,
-                            request=request.update(
-                                status_code=HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE
-                            )
-                        )
-                elif request.method == 'GET':
-                    for name, path in self.__static_items.items():
-                        if request.url.startswith(name):
                             try:
-                                if ((stat := os.stat(filename := f'{path}{request.url[len(name):]}'))[0] & 0x4000) == 0:
-                                    with open(filename, 'rb') as fh:
-                                        return await self.send(
-                                            writer=writer,
-                                            request=request.update(
-                                                status_code=HTTP_STATUS_OK,
-                                                content_headers={
-                                                    'Content-Type': HTTP_RESPONSE_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream'),
-                                                    'Content-Length': stat[6]
-                                                }
-                                            ),
-                                            content=fh.read()
-                                        )
+                                content_type = str(headers_sent['content-type']).lower()
+
+                                if 'application/x-www-form-urlencoded' in content_type:
+                                    for p in stream.decode('utf-8').split('&'):
+                                        k, v = p.split('=')
+                                        post_data[url_decode(k)] = url_decode(v)
+                                elif 'application/json' in content_type:
+                                    post_data = json.loads(stream)
                                 else:
-                                    raise FileNotFoundError
-                            except Exception as e:
-                                return await self.send(
-                                    writer=writer,
-                                    request=request.update(
-                                        status_code=HTTP_STATUS_NOT_FOUND
-                                    )
-                                )
+                                    raise TypeError
+                            except:
+                                return await self.send(writer, request, status.STATUS_415_UNSUPPORTED_MEDIA_TYPE)
+                    except:
+                        return await self.send(writer, request, status.STATUS_411_LENGTH_REQUIRED)
+
+                request = HTTPService.Request(url, method, headers_sent, post_data, query_param)
 
                 for pattern, item in self.__items.items():
                     if request.method not in item[0]:
@@ -362,119 +364,125 @@ class HTTPService:
                         
                         if match:
                             args = [i for i in match.groups() if i is not None]
-
-                        return await self.send(
-                            writer=writer, 
-                            request=request.update(
-                                status_code=HTTP_STATUS_OK
-                            ),
-                            content=await item[1](request, *args)
-                        )
+                        
+                        try:
+                            request.content = await item[1](request, *args) or ''
+                        
+                            if request.status_code == 0:
+                                request.status_code = status.STATUS_200_OK
+                        except:
+                            request.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
+                        finally:
+                            return await self.send(writer, request)
                     
-                return await self.send(
-                    writer=writer, 
-                    request=request.update(
-                        status_code=HTTP_STATUS_NOT_FOUND
-                    )
-                )
-            except OSError as e:
+                return await self.send(writer, request, status.STATUS_404_NOT_FOUND)
+            except Exception as e:
                 print(f'HTTPService.client_callback(): {e}')
                 writer.close()
             
         shutdown_event = asyncio.Event()
 
-        async with (_ := await asyncio.start_server(client_callback, wifi.IP, port)):
+        async with await asyncio.start_server(client_callback, wifi.IP, port):
             print(f'$ HTTP service started on: http://{wifi.IP}:{port}')
             await shutdown_event.wait()
 
-    async def send(self, writer: asyncio.StreamWriter, request: 'HTTPService.Request', content: str|bytes = ''):
+    async def send(self, writer: asyncio.StreamWriter, request: 'HTTPService.Request', status_code: int = 0):
         led.value(1)
 
         try:
-            headers = [f'HTTP/1.1 {HTTP_STATUS_TEXT.get(request.status_code, "200 OK")}']
+            headers = [status.text(status_code or request.status_code)]
 
-            for name, value in request.content_headers.items():
+            for name, value in request.headers.items():
                 headers.append(f'{name}: {value}')
                 
             writer.write(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
             await writer.drain()
 
-            if content or request.content:
-                writer.write(bytes(content or request.content, 'utf-8'))
+            if request.content:
+                writer.write(bytes(request.content, 'utf-8'))
                 await writer.drain()
         except Exception as e:
             print(f'HTTPService.send("{request.url}"): {e}')
         finally:
             writer.close()
             await writer.wait_closed()
-            print(f'{serv_crontab.datetime} - {request.method} {request.status_code} {request.url} ({request.content_headers.get("Content-Type")})')
+            print(f'{serv_crontab.datetime} - {request.method} {status_code or request.status_code} {request.url} ({request.headers.get("Content-Type", "text/html")})')
         
         led.value(0)
 
     class Request:
 
         @property
-        def status_code(self) -> int:
-            return self.__status_code
+        def url(self) -> str:
+            return self.__url
         
         @property
-        def content(self) -> str|bytes:
-            return self.__content
+        def method(self) -> str:
+            return self.__method
+        
+        @property
+        def headers_sent(self) -> dict:
+            return self.__headers_sent
+        
+        @property
+        def post_data(self) -> dict:
+            return self.__post_data
+        
+        @property
+        def query_param(self) -> dict:
+            return self.__query_param
 
-        @property
-        def content_headers(self) -> dict[str, str]:
-            return self.__content_headers
-        
-        def __init__(self):
-            self.url: str = ''
-            self.method: str = 'GET'
-            self.params: dict[str, str] = {}
-            self.headers: dict[str, str] = {}
-            self.post_data: dict = {}
+        def __init__(self, url: str = '', method: str = 'GET', headers_sent: dict = {}, post_data: dict = {}, query_param: dict = {}):
+            self.__url: str = url
+            self.__method: str = method
+            self.__headers_sent: dict = headers_sent
+            self.__post_data: dict = post_data
+            self.__query_param: dict = query_param
 
             # Response
-            self.__status_code: int = HTTP_STATUS_NO_CONTENT
-            self.__content: str|bytes = ''
-            self.__content_headers: dict[str, str] = {'Content-Type': 'text/html'}
+            self.content: str|bytes = ''
+            self.headers: dict[str, str] = {'Content-Type': 'text/html'}
+            self.status_code: int = 0
 
-        def update(self, status_code: int = 0, content_headers: dict = {}) -> 'HTTPService.Request':
-            if status_code > 0:
-                self.__status_code = status_code
+        def redirect(self, to: str, status_code: int = status.STATUS_307_TEMPORARY_REDIRECT):
+            self.content = ''
+            self.headers = {'Location': to}
 
-            self.__content_headers.update(content_headers)
-            return self
-        
-        def redirect(self, to: str, status_code: int = HTTP_STATUS_TEMPORARY_REDIRECT):
-            if status_code not in [HTTP_STATUS_TEMPORARY_REDIRECT, HTTP_STATUS_PERMANENT_REDIRECT]:
-                status_code = HTTP_STATUS_TEMPORARY_REDIRECT
+            if status_code not in [status.STATUS_307_TEMPORARY_REDIRECT, status.STATUS_308_PERMANENT_REDIRECT]:
+                status_code = status.STATUS_307_TEMPORARY_REDIRECT
 
-            self.update(status_code=status_code, content_headers={'Location': to})
-        
+            self.status_code = status_code
+
         def json(self, data: int|str|dict) -> str:
-            self.__content_headers['Content-Type'] = 'application/json'
-            return json.dumps(data)
+            self.headers['Content-Type'] = 'application/json'
+
+            try:
+                self.status_code = status.STATUS_200_OK
+                return json.dumps(data)
+            except Exception as e:
+                self.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
 
         def template(self, content: str, context: dict = {}) -> str:
-            self.__content_headers['Content-Type'] = 'text/html'
-            return Tf.echo(content, context)
+            self.headers['Content-Type'] = 'text/html'
+            
+            try:
+                self.status_code = status.STATUS_200_OK
+                return Tf.echo(content, context)
+            except Exception as e:
+                self.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
     
         def attachment(self, filename: str) -> bytes:
             try:
                 if os.stat(filename)[0] & 0x4000 == 0:
-                    with open(filename, 'rb') as fh:
-                        self.update(
-                            status_code=HTTP_STATUS_OK,
-                            content_headers={
-                                'Content-Type': HTTP_RESPONSE_CONTENT_TYPE.get(filename.lower().split('.')[-1], 'application/octet-stream'),
-                                'Content-disposition': f'attachment; filename="{filename.split("/")[-1]}"'
-                            }
-                        )
+                    self.headers['Content-Type'] = media.type(filename.split('.')[-1]),
+                    self.headers['Content-disposition'] = f'attachment; filename="{filename.split("/")[-1]}"'
+                    self.status_code = status.STATUS_200_OK
 
-                        return fh.read()
+                    return open(filename, 'rb').read()
                 else:
                     raise FileNotFoundError
             except Exception as e:
-                raise e
+                self.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
 
 
 class WebSocketService:
@@ -721,6 +729,7 @@ class CrontabService:
             self.minute: int|list = minute
             self.second: int|list = second
             self.weekday: int|list = weekday
+            self.__check_values()
 
         def next(self, month: int|list = -1, date: int|list = -1, hour: int|list = -1, minute: int|list = -1, second: int|list = -1, weekday: int|list = -1):
             self.state = True
@@ -731,11 +740,25 @@ class CrontabService:
             self.minute = minute
             self.second = second
             self.weekday = weekday
+            self.__check_values()
         
         def stop(self):
             self.state = False
 
+        def __check_values(self):
+            for attribute, accept_values in [
+                ('month', range(1, 13)), ('date', range(1, 32)), ('weekday', range(0, 7)),
+                ('hour', range(0, 24)), ('minute', range(0, 60)), ('second', range(0, 60)),
+            ]:
+                if (value := getattr(self, attribute)) == -1:
+                    continue
+                
+                for v in list(value):
+                    if v not in accept_values:
+                        raise ValueError(f'Schedule.{attribute}\'s value <{v}> is out of bound <{accept_values[0]} - {accept_values[-1]}>')
 
+
+led = machine.Pin('LED', machine.Pin.OUT)
 wifi: WiFi = WiFi()
 serv_http: HTTPService = HTTPService()
 serv_crontab: CrontabService = CrontabService()
@@ -770,7 +793,7 @@ class TheFoundation:
     def mount(self, path: str, name: str = ''):
         serv_http.mount(path, name)
 
-    def map(self, methods: str, pattern: str) -> callable[[Request], int]:
+    def map(self, methods: str, pattern: str) -> callable[[Request], str]:
         def decorator(callback: callable):
             return serv_http.map(methods, pattern, callback)
 
@@ -787,13 +810,13 @@ class TheFoundation:
             return serv_crontab.map(name or unique_id(), callback, month, date, hour, minute, second, weekday)
         
         return decorator
+    
+    def add_background_task(self, callback: callable, kwargs: dict = {}):
+        loop = asyncio.get_event_loop()
+        loop.create_task(callback(**kwargs))
 
     def listen(self, port: int = 80, crontab_interval: int = 1):
         async def serve_forever():
             await asyncio.gather(serv_http.init(port), serv_crontab.init(crontab_interval), *serv_websocket.init())
         
         asyncio.run(serve_forever())
-
-    def add_background_task(self, callback: callable, kwargs: dict = {}):
-        loop = asyncio.get_event_loop()
-        loop.create_task(callback(**kwargs))
