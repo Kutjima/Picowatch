@@ -1,58 +1,70 @@
+import gc
 import json
 
-from libs.routerhttp import HTTP, RouterHTTP
+from libs.thefoundation import asyncio, status, TheFoundation, Request, WebSocket, Schedule
 
+
+app = TheFoundation()
 
 for crendential in json.load(open('/credentials.json')):
-    app = RouterHTTP(crendential['ssid'], crendential['password'], ignore_exception=True)
-
-    if app.wlan.isconnected():
+    if app.connect(crendential['ssid'], crendential['password'], timezone=2):
         break
-
-if app.wlan.isconnected() == False:
+else:
     raise RuntimeError('Connection failed to WiFi')
 
 app.mount(path='/www/public', name='/public')
 
+@app.map(methods='GET', pattern='/')
+async def a(request: Request) -> str:
+    return request.redirect(to='/ws')
 
-@app.map(HTTP.STATUS_NOT_FOUND)
-def a(http: HTTP):
-    http.response.content = 'Not Found me...'
+@app.map(methods='GET', pattern='/download')
+async def b(request: Request) -> str:
+    #return request.content_to_attachment('/www/public/favicon.png')
+    return request.abort(status.STATUS_503_SERVICE_UNAVAILABLE)
 
-@app.map(HTTP.STATUS_INTERNAL_SERVER_ERROR)
-def b(http: HTTP):
-    pass
+@app.map(methods='GET', pattern='/favicon.png')
+async def b(request: Request) -> str:
+    return request.content_to_media('/www/public/favicon.png', {'Cache-Control': 'max-age=86400, must-revalidate'})
 
+@app.map(methods='GET', pattern='/ws')
+async def c(request: Request) -> str:
+    return request.content_to_template('www/templates/ws.html')
 
-@app.map('GET|POST', '/')
-def c(http: HTTP) -> int:
-    status, content = http.response.template('www/templates/index.html', {
-        'metadata': {
-            'uuid_0': {
-                'title': 'Hello World 1!', 
-                'description': 'Hello my world 1!'
-            },
-            'uuid_1': {
-                'title': 'Hello World 2!', 
-                'description': 'Hello my world 2!'
-            },
-            'uuid_2': {
-                'title': 'Hello World 3!', 
-                'description': 'Hello my world 3!'
-            }
-        },
+@app.map(methods='GET', pattern='/json')
+async def d(request: Request) -> str:
+    return request.content_to_json({
+        'app': 'The Foundation',
+        'version': 0.2
     })
 
-    http.response.content = content
+@app.map(methods='GET|POST', pattern='/templating')
+async def d(request: Request) -> str:
+    return request.content_to_template('www/templates/index.html', {
+        'title': 'The Foundation',
+        'version': 0.2,
+        'POST': request.POST
+    })
 
-    if status:
-        return HTTP.STATUS_OK
-    
-    return HTTP.STATUS_INTERNAL_SERVER_ERROR
+@app.websocket(port=8000, max_connections=2)
+async def e(websocket: WebSocket):
+    while True:
+        try:
+            message = await websocket.recv()
+            # print('From:', websocket.address, ' - ', message)
+            # websocket.send(str(websocket))
+            websocket.broadcast(str(websocket.websockets))
+        except WebSocket.WebSocketDisconnect:
+            break
+        except Exception as e:
+            print(e)
+            break
 
+# @app.schedule(second=[0, 15, 30, 45])
+# async def f(schedule: Schedule):
+#     print('Triggered:', schedule.name, 'at:', schedule.localtime)
+#     print('Free memory:', round(gc.mem_free() / 1024, 2), 'kb.', schedule.n)
 
-@app.map('GET', '/(download|dl)\/?(attachment)?')
-def d(http: HTTP, access: str, nothing: str = '') -> int:
-    return http.response.attachment('www/public/favicon.png')
+#     await asyncio.sleep(0)
 
 app.listen()
