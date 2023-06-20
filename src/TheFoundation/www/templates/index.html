@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-    <title>The Foundation</title>
+    <title>{{ title }} - v{{ version }}</title>
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,14 +13,14 @@
     <div class="container mt-4">
         <form action="" method="post">
             <fieldset>
-                <?= Tf.set('e', metadata.uuid_0.title + ' YoYo') ?>
-                <?= Tf.match('1 == 1', then='1 == 1 indeed!').nomatch(then='No match') ?>
+                {{ Tf.set('e', title + ' YoYo') }}
+                {{ Tf.match(POST, then='1 == 1 indeed!').nomatch(then='No match') }}
                 <hr />
-                { e }
+                {{ e }}
                 <br />
-                <?= Tf.echo('{ i } { item.title }! <br >', times=metadata) ?>
-                <?= Tf.echo('{ i } { item }! <br >', times=[2, 3, 4]) ?>
-               
+                <?= Tf.echo('{{ i }} {{ item }}! <br >', times=[2, 3, 4]) ?>
+                
+                {{ POST }}
                 <div class="form-group">
                     <label class="form-label mt-4">Transport</label>
                     <input class="form-control" type="text" name="transport" /> 
@@ -29,11 +29,11 @@
 
                 <div class="form-group">
                     <label class="form-label mt-4">Description</label>
-                    <textarea class="form-control" name="meta[description]"></textarea>
+                    <textarea class="form-control" name="description"></textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label mt-4">Options</label>
-                    <select class="form-select" name="meta[options]">
+                    <select class="form-select" name="options">
                         <option>1</option>
                         <option>2</option>
                         <option>3</option>

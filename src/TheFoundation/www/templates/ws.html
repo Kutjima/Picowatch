@@ -22,12 +22,12 @@ websocket.onopen = function(e) {
 };
 websocket.onclose = function(e) {
     clearInterval(si);
-    console.log(`${channel}] > connection lost!`);
+    console.log(`${channel} > connection lost!`);
     websocket.close();
 };
 websocket.onerror = function(e) {
     clearInterval(si);
-    console.log(`${channel}] >> connection lost (an error occured)`);
+    console.log(`${channel} >> connection lost (an error occured)`);
     websocket.close();
 };
 websocket.onmessage = function(e) {

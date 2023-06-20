@@ -29,6 +29,7 @@ class status:
     STATUS_422_UNPROCESSABLE_ENTITY: int = 422
     STATUS_500_INTERNAL_SERVER_ERROR: int = 500
     STATUS_501_NOT_IMPLEMENTED: int = 501
+    STATUS_503_SERVICE_UNAVAILABLE: int = 503
 
     STATUS_TEXTS: dict[int, str] = {
         STATUS_200_OK: 'HTTP/1.1 200 OK',
@@ -44,11 +45,12 @@ class status:
         STATUS_422_UNPROCESSABLE_ENTITY: 'HTTP/1.1 422 Unprocessable Entity',
         STATUS_500_INTERNAL_SERVER_ERROR: 'HTTP/1.1 500 Internal Server Error',
         STATUS_501_NOT_IMPLEMENTED: 'HTTP/1.1 500 Not Implemented',
+        STATUS_503_SERVICE_UNAVAILABLE: 'HTTP/1.1 503 Service Unavailable',
     }
 
     @staticmethod
     def text(status_code: int) -> str:
-        return status.STATUS_TEXTS.get(status_code, f'HTTP/1.1 {status_code} Unknown Status Code')
+        return status.STATUS_TEXTS.get(int(status_code), f'HTTP/1.1 {status_code} Unknown Status Code')
     
 
 class media:
@@ -114,8 +116,11 @@ class Tz:
                         
             setattr(self, k, v)
 
-    def __getitem__(self, k: str) -> any:
-        return getattr(self, k)
+    def __getitem__(self, k: str):
+        try:
+            return getattr(self, k)
+        except:
+            pass
     
     def __str__(self) -> str:
         return str(self.__dict__)
@@ -123,7 +128,7 @@ class Tz:
     def __len__(self) -> int:
         return len(self.__dict__)
     
-    def items(self) -> dict[str, any]:
+    def items(self) -> dict:
         return self.__dict__.items()
     
 
@@ -164,14 +169,15 @@ class Tf:
         echo = ''
 
         for i, item in times:
+            i = i
+            item = item
             try:
                 if not isinstance(item, dict):
                     item = item
                 else:
                     item = Tz(item)
 
-                # , r'\{\s*(.*?)\s*\}'
-                for pattern in [r'\<\?\=\s*(.*?)\s*\?\>']:
+                for pattern in [r'\<\?\=\s*(.*?)\s*\?\>', r'\{\{\s*(.*?)\s*\}\}']:
                     content = re.sub(pattern, lambda match: str(eval(match.group(1) or '')), content)
 
                 echo += content
@@ -260,13 +266,16 @@ class WiFi:
             time.sleep(4)
 
         if self.__wlan.isconnected():
-            time.gmtime(ntptime.time() + (timezone * 3600))
+            tm = time.gmtime(ntptime.time() + int(timezone * 3600))
+            machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6] + 1, tm[3], tm[4], tm[5], 0))
             print(f'$ Connection succeeded to WiFi: {ssid}')
 
         return self.__wlan.isconnected()
 
 
 class HTTPService:
+
+    SERVICE_HEALTH: int = 0
 
     def __init__(self):
         self.__items: dict[str, tuple[list[str], callable]] = {}
@@ -286,99 +295,85 @@ class HTTPService:
         return callback
     
     async def init(self, port: int = 80):
-        async def client_callback(reader: asyncio.StreamReader, writer: asyncio.asyncioStreamWriter):
+        async def client_callback(stream: asyncio.StreamReader, stream_client: asyncio.asyncioStreamWriter):
             try:
                 gc.collect()
-                url: str = ''
-                method: str = 'GET'
-                headers_sent: dict = {}
-                post_data: dict = {}
-                query_param: dict = {}
+                request: HTTPService.Request = HTTPService.Request()
 
                 while True:
-                    if (line := (await reader.readline()).decode('utf-8').strip()) == '':
+                    if (line := (await stream.readline()).decode('utf-8').strip()) == '':
                         break
 
-                    if len(headers_sent) == 0:
+                    if len(request.headers) == 0:
                         if (match := re.compile(r'(GET|POST)\s+([^\s]+)\s+HTTP').search(line)):
                             if len(uu := match.group(2).split('?')) == 2:
                                 for pp in uu[1].split('&'):
                                     if len(p := pp.split('=')) == 2:
-                                        query_param[url_decode(p[0])] = url_decode(p[1])
+                                        request.GETs[url_decode(p[0])] = url_decode(p[1])
 
-                            url = uu[0]
-                            method = match.group(1)
+                            request.url = uu[0]
+                            request.method = match.group(1)
                     
                     if len(splitted_line := line.split(': ')) == 2:
-                        headers_sent[str(splitted_line[0]).lower()] = splitted_line[1]
+                        request.headers[str(splitted_line[0]).lower()] = splitted_line[1]
 
-                if not url:
+                if not request.url:
                     return
 
-                request = HTTPService.Request(url, method, headers_sent, post_data, query_param)
+                url: str = request.url
+                method: str = request.method
+                content: str|bytes = ''
 
                 for name, path in self.__static_items.items():
-                    if url.startswith(name):
-                        try:
-                            if ((stat := os.stat(filename := f'{path}{url[len(name):]}'))[0] & 0x4000) == 0:
-                                request.content = open(filename, 'rb').read()
-                                request.headers['Content-Type'] = media.type(filename.split('.')[-1])
-                                request.headers['Content-Length'] = stat[6]
-                                request.status_code = status.STATUS_200_OK
+                    if request.url.startswith(name) and (filename := f'{path}{request.url[len(name):]}'):
+                        content = request.content_to_media(filename)
+                        break
 
-                                return await self.send(writer, request)
-                            else:
-                                raise FileExistsError
-                        except Exception as e:
-                            return await self.send(writer, request, status.STATUS_404_NOT_FOUND)
-                
-                if method == 'POST':            
+                if request.status_code == 0 and request.method == 'POST':
                     try:
-                        if (content_length := int(headers_sent['content-length'])) > 0:
-                            stream = await reader.readexactly(content_length)
+                        if (content_length := int(request.headers['content-length'])) > 0:
+                            multipart: bytes = await stream.readexactly(content_length)
 
                             try:
-                                content_type = str(headers_sent['content-type']).lower()
+                                content_type = str(request.headers['content-type']).lower()
 
-                                if 'application/x-www-form-urlencoded' in content_type:
-                                    for p in stream.decode('utf-8').split('&'):
+                                if 'application/json' in content_type:
+                                    request.POSTs = json.loads(multipart)
+                                elif 'application/x-www-form-urlencoded' in content_type:
+                                    for p in multipart.decode('utf-8').split('&'):
                                         k, v = p.split('=')
-                                        post_data[url_decode(k)] = url_decode(v)
-                                elif 'application/json' in content_type:
-                                    post_data = json.loads(stream)
+                                        request.POSTs[url_decode(k)] = url_decode(v)
                                 else:
                                     raise TypeError
                             except:
-                                return await self.send(writer, request, status.STATUS_415_UNSUPPORTED_MEDIA_TYPE)
+                                request.abort(status.STATUS_415_UNSUPPORTED_MEDIA_TYPE)
                     except:
-                        return await self.send(writer, request, status.STATUS_411_LENGTH_REQUIRED)
+                        request.abort(status.STATUS_411_LENGTH_REQUIRED)
 
-                request = HTTPService.Request(url, method, headers_sent, post_data, query_param)
+                if request.status_code == 0:
+                    for pattern, item in self.__items.items():
+                        if request.method not in item[0]:
+                            continue
+                        
+                        if pattern == request.url or (match := re.match(f'^{pattern}$', request.url)):
+                            try:
+                                args = match.groups() if match else []
+                                content = await item[1](request, *[v for v in args if v is not None]) or ''
+                            
+                                if request.status_code == 0:
+                                    request.send_status_code(status.STATUS_200_OK)
+                            except:
+                                request.abort(status.STATUS_500_INTERNAL_SERVER_ERROR)
+                            finally:
+                                break
+                    else:
+                        request.abort(status.STATUS_404_NOT_FOUND)
 
-                for pattern, item in self.__items.items():
-                    if request.method not in item[0]:
-                        continue
-
-                    if pattern == request.url or (match := re.match('^' + pattern + '$', request.url)):
-                        args = []
-                        
-                        if match:
-                            args = [i for i in match.groups() if i is not None]
-                        
-                        try:
-                            request.content = await item[1](request, *args) or ''
-                        
-                            if request.status_code == 0:
-                                request.status_code = status.STATUS_200_OK
-                        except:
-                            request.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
-                        finally:
-                            return await self.send(writer, request)
-                    
-                return await self.send(writer, request, status.STATUS_404_NOT_FOUND)
+                await request.write_back(stream_client, content)
+                print(f'{serv_crontab.datetime} - {method} {request.status_code} {url} ({request.content_type})')
             except Exception as e:
                 print(f'HTTPService.client_callback(): {e}')
-                writer.close()
+                stream_client.close()
             
         shutdown_event = asyncio.Event()
 
@@ -386,103 +381,139 @@ class HTTPService:
             print(f'$ HTTP service started on: http://{wifi.IP}:{port}')
             await shutdown_event.wait()
 
-    async def send(self, writer: asyncio.StreamWriter, request: 'HTTPService.Request', status_code: int = 0):
-        led.value(1)
-
-        try:
-            headers = [status.text(status_code or request.status_code)]
-
-            for name, value in request.headers.items():
-                headers.append(f'{name}: {value}')
-                
-            writer.write(bytes('\r\n'.join(headers) + '\r\n\r\n', 'utf-8'))
-            await writer.drain()
-
-            if request.content:
-                writer.write(bytes(request.content, 'utf-8'))
-                await writer.drain()
-        except Exception as e:
-            print(f'HTTPService.send("{request.url}"): {e}')
-        finally:
-            writer.close()
-            await writer.wait_closed()
-            print(f'{serv_crontab.datetime} - {request.method} {status_code or request.status_code} {request.url} ({request.headers.get("Content-Type", "text/html")})')
-        
-        led.value(0)
-
     class Request:
 
         @property
-        def url(self) -> str:
-            return self.__url
+        def GET(self) -> dict:
+            return self.GETs
         
         @property
-        def method(self) -> str:
-            return self.__method
-        
-        @property
-        def headers_sent(self) -> dict:
-            return self.__headers_sent
-        
-        @property
-        def post_data(self) -> dict:
-            return self.__post_data
-        
-        @property
-        def query_param(self) -> dict:
-            return self.__query_param
+        def POST(self) -> dict:
+            return self.POSTs
 
-        def __init__(self, url: str = '', method: str = 'GET', headers_sent: dict = {}, post_data: dict = {}, query_param: dict = {}):
-            self.__url: str = url
-            self.__method: str = method
-            self.__headers_sent: dict = headers_sent
-            self.__post_data: dict = post_data
-            self.__query_param: dict = query_param
+        @property
+        def status_code(self) -> int:
+            return self.__Response.status_code
+        
+        @property
+        def status_text(self) -> str:
+            return status.text(self.__Response.status_code)
+        
+        @property
+        def content_type(self) -> str:
+            if 'Content-Type' in self.__Response.headers:
+                return self.__Response.headers['Content-Type']
+            
+            return 'application/octet-stream'
 
-            # Response
-            self.content: str|bytes = ''
-            self.headers: dict[str, str] = {'Content-Type': 'text/html'}
-            self.status_code: int = 0
+        @property
+        def headers_to_send(self) -> dict:
+            return self.__Response.headers
 
-        def redirect(self, to: str, status_code: int = status.STATUS_307_TEMPORARY_REDIRECT):
-            self.content = ''
-            self.headers = {'Location': to}
+        def __init__(self):
+            self.url: str = ''
+            self.method: str = 'GET'
+            self.headers: dict = {}
+            self.GETs: dict = {}
+            self.POSTs: dict = {}
+
+            self.__Response: HTTPService.Response = HTTPService.Response()
+
+        def send_status_code(self, status_code: int):
+            self.__Response.status_code = int(status_code)
+
+        def abort(self, status_code: int):
+            if 400 <= status_code < 600:
+                self.__Response.status_code = int(status_code)
+
+        def service_unavailable(self):
+            self.__Response.status_code = status.STATUS_503_SERVICE_UNAVAILABLE
+
+        def update_headers_to_send(self, headers: dict):
+            self.__Response.headers.update(headers)
+
+        def redirect(self, to: str, status_code: int = status.STATUS_308_PERMANENT_REDIRECT):
+            self.__Response.headers['Location'] = to
+            self.__Response.status_code = status_code
 
             if status_code not in [status.STATUS_307_TEMPORARY_REDIRECT, status.STATUS_308_PERMANENT_REDIRECT]:
-                status_code = status.STATUS_307_TEMPORARY_REDIRECT
+                self.__Response.status_code = status.STATUS_308_PERMANENT_REDIRECT
 
-            self.status_code = status_code
-
-        def json(self, data: int|str|dict) -> str:
-            self.headers['Content-Type'] = 'application/json'
-
+        def content_to_json(self, data: int|str|list|dict) -> str:
             try:
-                self.status_code = status.STATUS_200_OK
+                self.__Response.headers['Content-Type'] = 'application/json'
+                self.__Response.status_code = status.STATUS_200_OK
+
                 return json.dumps(data)
             except Exception as e:
-                self.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
+                self.__Response.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
 
-        def template(self, content: str, context: dict = {}) -> str:
-            self.headers['Content-Type'] = 'text/html'
-            
+        def content_to_template(self, content: str, context: dict = {}, status_code: int = status.STATUS_200_OK) -> str:
             try:
-                self.status_code = status.STATUS_200_OK
+                self.__Response.headers['Content-Type'] = 'text/html'
+                self.__Response.status_code = status_code
+            
                 return Tf.echo(content, context)
             except Exception as e:
-                self.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
+                print(e)
+                self.__Response.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
     
-        def attachment(self, filename: str) -> bytes:
+        def content_to_attachment(self, filename: str) -> bytes:
             try:
                 if os.stat(filename)[0] & 0x4000 == 0:
-                    self.headers['Content-Type'] = media.type(filename.split('.')[-1]),
-                    self.headers['Content-disposition'] = f'attachment; filename="{filename.split("/")[-1]}"'
-                    self.status_code = status.STATUS_200_OK
+                    self.__Response.headers['Content-Type'] = media.type(filename.split('.')[-1])
+                    self.__Response.headers['Content-disposition'] = f'attachment; filename="{filename.split("/")[-1]}"'
+                    self.__Response.status_code = status.STATUS_200_OK
 
                     return open(filename, 'rb').read()
                 else:
-                    raise FileNotFoundError
+                    self.__Response.status_code = status.STATUS_404_NOT_FOUND
+            except:
+                self.__Response.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
+
+        def content_to_media(self, filename: str, headers: dict = {}) -> bytes:
+            try:
+                if (stat := os.stat(filename))[0] & 0x4000 == 0:
+                    self.__Response.headers.update(headers)
+                    self.__Response.headers['Content-Type'] = media.type(filename.split('.')[-1])
+                    self.__Response.headers['Content-Length'] = stat[6]
+                    self.__Response.status_code = status.STATUS_200_OK
+                    
+                    return open(filename, 'rb').read()
+                else:
+                    self.__Response.status_code = status.STATUS_404_NOT_FOUND
+            except:
+                self.__Response.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
+
+        async def write_back(self, stream_client: asyncio.asyncioStreamWriter, content: str|bytes):
+            led.value(1)
+
+            try:
+                stream_client.write(bytes(f'{self.status_text}\r\n', 'utf-8'))
+
+                for name, value in self.headers_to_send.items():
+                    if value is not None:
+                        stream_client.write(bytes(f'{name}: {value}\r\n', 'utf-8'))
+
+                stream_client.write(bytes('\r\n', 'utf-8'))
+                await stream_client.drain()
+
+                if content:
+                    stream_client.write(bytes(content, 'utf-8'))
+                    await stream_client.drain()
             except Exception as e:
-                self.status_code = status.STATUS_500_INTERNAL_SERVER_ERROR
+                print(f'HTTPService.Request.write_back("{self.url}"): {e}')
+            finally:
+                stream_client.close()
+                await stream_client.wait_closed()
+            
+            led.value(0)
+
+    class Response:
+
+        def __init__(self):
+            self.headers: dict = {'Content-Type': 'text/html'}
+            self.status_code: int = HTTPService.SERVICE_HEALTH
 
 
 class WebSocketService:
@@ -614,11 +645,11 @@ class WebSocketService:
 
         def __heartbeat(self, _):
             if self.socket_state == 4:
-                self.close()
+                self.disconnect()
 
-        def close(self):
+        def disconnect(self):
             if self.__socket is not None:
-                print('Connection closed:', str(self.address))
+                print('Connection disconnected:', str(self.address))
                 self.__socket.setsockopt(socket.SOL_SOCKET, 20, None)
                 self.__socket.close()
                 self.__socket = self.__websocket = None
@@ -629,27 +660,33 @@ class WebSocketService:
 
         async def recv(self, decode_to: str = 'utf-8'):
             if self.socket_state == 4:
-                self.close()
+                self.disconnect()
 
             while self.__websocket:
-                if (message := self.__websocket.read()):
-                    if decode_to:
-                        return message.decode(decode_to)
+                try:
+                    if (message := self.__websocket.read()):
+                        if decode_to:
+                            return message.decode(decode_to)
 
-                    return message
-                
+                        return message
+                except Exception:
+                    self.disconnect()
+
                 await asyncio.sleep(0)
             
             raise WebSocketService.WebSocket.WebSocketDisconnect
 
         def send(self, message: str):
             if self.socket_state == 4:
-                self.close()
+                self.disconnect()
 
             if self.is_closed:
                 raise WebSocketService.WebSocket.WebSocketDisconnect
 
-            self.__websocket.write(message)
+            try:
+                self.__websocket.write(message)
+            except Exception:
+                self.disconnect()
 
         def broadcast(self, message: str):
             for websocket in self.websockets:
@@ -666,7 +703,12 @@ class WebSocketService:
 
 
 class CrontabService:
-        
+
+    WEEKDAYS: tuple[str] = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+    SHORT_WEEKDAYS: tuple[str] = ('Mon.', 'Tue.', 'Wed.', 'Thu.', 'Fri.', 'Sat.', 'Sun.')
+    MONTHS: tuple[str] = ('', 'January', 'February', 'March', 'April', 'Mai', 'June', 'Julu', 'August', 'September', 'October', 'November', 'December')
+    SHORT_MONTHS: tuple[str] = ('', 'Jan.', 'Feb.', 'Mar.', 'Apr.', 'Mai', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.')
+
     @property
     def datetime(self) -> str:
         n = time.localtime()
@@ -768,18 +810,14 @@ serv_websocket: WebSocketService = WebSocketService()
 class Request(HTTPService.Request):
     pass
 
-
 class WebSocket(WebSocketService.WebSocket):
     pass
-
 
 class WebSocketDisconnect(WebSocket.WebSocketDisconnect):
     pass
 
-
 class Schedule(CrontabService.Schedule):
     pass
-
 
 class TheFoundation:
 
@@ -789,6 +827,12 @@ class TheFoundation:
     
     def connect(self, ssid: str, password: str, timezone: int = 0) -> bool:
         return wifi.connect(ssid, password, timezone)
+    
+    def service_available(self):
+        HTTPService.SERVICE_HEALTH = 0
+    
+    def service_unavailable(self):
+        HTTPService.SERVICE_HEALTH = status.STATUS_503_SERVICE_UNAVAILABLE
     
     def mount(self, path: str, name: str = ''):
         serv_http.mount(path, name)
