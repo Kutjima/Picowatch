@@ -750,6 +750,10 @@ class CrontabService:
 
     class Schedule:
 
+        EVERY_MINUTE: dict = {'second': 1}
+        EVERY_HOUR: dict = {'minute': 0, 'second': 1}
+        EVERY_MIDNIGHT: dict = {'hour': 0, 'minute': 0, 'second': 1}
+
         @property
         def datetime(self) -> str:
             n = time.localtime()

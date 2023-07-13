@@ -54,17 +54,15 @@ async def e(websocket: WebSocket):
             # print('From:', websocket.address, ' - ', message)
             # websocket.send(str(websocket))
             websocket.broadcast(str(websocket.websockets))
-        except WebSocket.WebSocketDisconnect:
-            break
-        except Exception as e:
+        except (WebSocket.WebSocketDisconnect, Exception) as e:
             print(e)
             break
 
-# @app.schedule(second=[0, 15, 30, 45])
-# async def f(schedule: Schedule):
-#     print('Triggered:', schedule.name, 'at:', schedule.localtime)
-#     print('Free memory:', round(gc.mem_free() / 1024, 2), 'kb.', schedule.n)
+@app.schedule(second=[0, 15, 30, 45])
+async def f(schedule: Schedule):
+    print('Triggered:', schedule.name, 'at:', schedule.localtime)
+    print('Free memory:', round(gc.mem_free() / 1024, 2), 'kb.', schedule.n)
 
-#     await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
 app.listen()
