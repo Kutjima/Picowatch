@@ -706,7 +706,7 @@ class CrontabService:
 
     WEEKDAYS: tuple[str] = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
     SHORT_WEEKDAYS: tuple[str] = ('Mon.', 'Tue.', 'Wed.', 'Thu.', 'Fri.', 'Sat.', 'Sun.')
-    MONTHS: tuple[str] = ('', 'January', 'February', 'March', 'April', 'Mai', 'June', 'Julu', 'August', 'September', 'October', 'November', 'December')
+    MONTHS: tuple[str] = ('', 'January', 'February', 'March', 'April', 'Mai', 'June', 'July', 'August', 'September', 'October', 'November', 'December')
     SHORT_MONTHS: tuple[str] = ('', 'Jan.', 'Feb.', 'Mar.', 'Apr.', 'Mai', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.')
 
     @property
